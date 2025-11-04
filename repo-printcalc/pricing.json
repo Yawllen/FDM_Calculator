@@ -13,7 +13,7 @@
 
   "power": { "tariff_rub_per_kwh": 4.7, "avg_power_w": 350 },
 
-  "depreciation_per_hour_rub": 46,
+  "depreciation_per_hour_rub": 50,
 
   "labor": { "hour_rate_rub": 500, "setup_min_included": 10 },
 
@@ -22,12 +22,12 @@
     "line_width_mm": 0.45,
     "layer_height_mm": 0.20,
     "utilization": 0.85,
-    "travel_factor": 1.427,
-    "a0": 0.538,
+    "travel_factor": 1.0,
+    "a0": 0.0,
     "a1": 1.0
   },
 
-  "geometry": { "volume_factor": 0.916 },
+  "geometry": { "volume_factor": 0.8 },
 
   "extras": {
     "fixed_overhead_rub": 0.0,

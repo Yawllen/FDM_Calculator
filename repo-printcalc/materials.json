@@ -1,14 +1,118 @@
 {
+  "Sealant TPU93": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 3.75
+  },
+  "Fiberpart ABS G4": {
+    "density_g_cm3": 1.04,
+    "price_rub_per_g": 3.07
+  },
+  "Fiberpart TPU C5": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 5.6
+  },
+  "Fiberpart ABSPA G8": {
+    "density_g_cm3": 1.1,
+    "price_rub_per_g": 4.0
+  },
+  "Fiberpart TPU G30": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 4.0
+  },
+  "Enduse SBS": {
+    "density_g_cm3": 1.04,
+    "price_rub_per_g": 2.4
+  },
+  "Enduse ABS": {
+    "density_g_cm3": 1.04,
+    "price_rub_per_g": 2.4
+  },
   "Enduse PETG": {
     "density_g_cm3": 1.27,
     "price_rub_per_g": 2.33
+  },
+  "Enduse PP": {
+    "density_g_cm3": 0.9,
+    "price_rub_per_g": 8.08
   },
   "Proto PLA": {
     "density_g_cm3": 1.24,
     "price_rub_per_g": 3.07
   },
-  "Enduse ABS": {
+  "ContiFiber CPA": {
+    "density_g_cm3": 1.15,
+    "price_rub_per_g": 200.0
+  },
+  "Sealant SEBS": {
     "density_g_cm3": 1.04,
-    "price_rub_per_g": 2.4
+    "price_rub_per_g": 5.2
+  },
+  "Sealant TPU": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 5.98
+  },
+  "Proto PVA": {
+    "density_g_cm3": 1.19,
+    "price_rub_per_g": 9.5
+  },
+  "Enduse-PA": {
+    "density_g_cm3": 1.15,
+    "price_rub_per_g": 3.0
+  },
+  "Enduse-TPU D70": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 3.99
+  },
+  "Fiberpart ABS G13": {
+    "density_g_cm3": 1.04,
+    "price_rub_per_g": 6.65
+  },
+  "Fiberpart PP G": {
+    "density_g_cm3": 0.9,
+    "price_rub_per_g": 3.3
+  },
+  "Fiberpart PP G30": {
+    "density_g_cm3": 0.9,
+    "price_rub_per_g": 3.31
+  },
+  "Enduse PC": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 0.0
+  },
+  "Fiberpart PA12 G12": {
+    "density_g_cm3": 1.01,
+    "price_rub_per_g": 7.24
+  },
+  "Metalcast-316L": {
+    "density_g_cm3": 8.0,
+    "price_rub_per_g": 16.0
+  },
+  "Fiberpart PC G20": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 2.6
+  },
+  "Fiberpart PA G30": {
+    "density_g_cm3": 1.15,
+    "price_rub_per_g": 7.9
+  },
+  "Enduse TPU D60": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 1.9
+  },
+  "Sealant TPU A90": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 2.6
+  },
+  "Sealant TPU A70": {
+    "density_g_cm3": 1.2,
+    "price_rub_per_g": 6.4
+  },
+  "Fiberpart PA CF30": {
+    "density_g_cm3": 1.15,
+    "price_rub_per_g": 10.4
+  },
+  "Другой материал": {
+    "density_g_cm3": 1.0,
+    "price_rub_per_g": 2.0
   }
 }
