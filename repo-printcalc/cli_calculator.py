@@ -90,10 +90,10 @@ CLI-версия 3D калькулятора печати (FDM)
   • Перед обработкой каждого файла выполняется полный сброс состояния парсера.
 
 Конфиги (materials.json / pricing.json):
-  • Формат ожидается такой же, как у GUI-версии. Любой ключ можно переопределить флагом --set key=val.
-  • price_rub_per_g и density_g_cm3 берутся из materials.json; всё остальное — из pricing.json.
+  • ВСЕГДА грузятся из папки, где лежит сам скрипт (строгий режим).
+  • Переопределять отдельные параметры можно флагом --set key=val.
 
-Пример вызова из Python (FastAPI):
+    Пример вызова из Python (FastAPI):
   >>> import subprocess, json
   >>> cmd = [
   ...   "treed-calc", "part.3mf",
@@ -117,6 +117,16 @@ CLI-версия 3D калькулятора печати (FDM)
 from __future__ import annotations
 
 import os, sys, json, time, argparse
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
+STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
+
+
+# === Strict config loading: always from script directory ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
+STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
@@ -166,32 +176,41 @@ def parse_kv_override(pairs):
     return out
 
 # ---------- Загрузка конфигов ----------
-def load_materials(path: str) -> Tuple[dict, dict]:
-    """Загружает materials.json. Возвращает (density_by_material, price_per_gram_by_material)."""
-    density = dict(core.DEFAULT_MATERIALS_DENSITY)
-    price_g = dict(core.DEFAULT_PRICE_PER_GRAM)
-    if os.path.exists(path):
+def load_materials(path: str):
+    """Читает materials.json строго из указанного пути. Возвращает (density_by_material, price_per_gram_by_material)."""
+    if not os.path.exists(path):
+        raise SystemExit(f"[cli] materials.json не найден: {path}")
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        raise SystemExit(f"[cli] materials.json: ошибка чтения/JSON — {e}")
+    if not isinstance(data, dict) or not data:
+        raise SystemExit("[cli] materials.json: ожидается объект {material: {...}}")
+    density, price_g = {}, {}
+    for name, row in data.items():
+        if not isinstance(row, dict):
+            raise SystemExit(f"[cli] materials.json: неверный формат у материала '{name}'")
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            density.clear(); price_g.clear()
-            for name, row in data.items():
-                density[name] = float(row.get('density_g_cm3', 1.2))
-                price_g[name] = float(row.get('price_rub_per_g', 0.0))
-        except Exception as e:
-            raise RuntimeError(f"materials.json: {e}")
+            d = float(row['density_g_cm3'])
+            pg = float(row['price_rub_per_g'])
+        except Exception:
+            raise SystemExit(f"[cli] materials.json: у материала '{name}' нет density_g_cm3/price_rub_per_g или неверный тип")
+        density[name] = d
+        price_g[name] = pg
     return density, price_g
 
 def load_pricing(path: str, override: dict | None = None) -> dict:
-    """Загружает pricing.json c применением override (--set). Возвращает конфиг расчёта."""
-    cfg = json.loads(json.dumps(core.DEFAULT_PRICING))  # deepcopy
-    if os.path.exists(path):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            deep_merge(cfg, data)
-        except Exception as e:
-            raise RuntimeError(f"pricing.json: {e}")
+    """Читает pricing.json строго из указанного пути. Применяет override (--set)."""
+    if not os.path.exists(path):
+        raise SystemExit(f"[cli] pricing.json не найден: {path}")
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception as e:
+        raise SystemExit(f"[cli] pricing.json: ошибка чтения/JSON — {e}")
+    if not isinstance(cfg, dict) or not cfg:
+        raise SystemExit("[cli] pricing.json: ожидается объект конфигурации")
     if override:
         deep_merge(cfg, override)
     return cfg
@@ -588,8 +607,8 @@ def main():
     """Точка входа CLI. Парсит аргументы, загружает конфиги, валидирует материал, вызывает compute_for_files и печатает результат."""
     ap = argparse.ArgumentParser(description="CLI 3D калькулятор печати (FDM) — .3mf/.stl, без UI, идентичен GUI-логике")
     ap.add_argument('files', nargs='+', help='Пути к моделям .3mf / .stl')
-    ap.add_argument('--materials', default='materials.json', help='Путь к materials.json (по умолчанию ./materials.json)')
-    ap.add_argument('--pricing',   default='pricing.json',   help='Путь к pricing.json (по умолчанию ./pricing.json)')
+    ap.add_argument('--materials', default='(ignored)', help='[ignored] materials.json всегда берётся из папки скрипта')
+    ap.add_argument('--pricing',   default='(ignored)',      help='[ignored] pricing.json всегда берётся из папки скрипта')
     ap.add_argument('--set', dest='overrides', action='append', help='Переопределить параметры pricing (format: key=val, напр. printing.a1=1.02). Можно несколько раз.')
 
     ap.add_argument('--material', required=False, help='Название материала из materials.json')
@@ -609,14 +628,16 @@ def main():
     args = ap.parse_args()
 
     # загрузка конфигов
-    dens, priceg = load_materials(args.materials)
-    pricing = load_pricing(args.pricing, override=parse_kv_override(args.overrides))
+    print(f"[cli] using materials: {STRICT_MATERIALS_PATH}", file=sys.stderr)
+    print(f"[cli] using pricing  : {STRICT_PRICING_PATH}",   file=sys.stderr)
+    dens, priceg = load_materials(STRICT_MATERIALS_PATH)
+    pricing = load_pricing(STRICT_PRICING_PATH, override=parse_kv_override(args.overrides))
+
 
     # выбор материала
     material = args.material
     if not material:
-        # по умолчанию берём первый из materials.json
-        material = next(iter(dens.keys()))
+        material = sorted(dens.keys())[0]
     if material not in dens:
         raise SystemExit(f"Материал '{material}' не найден в {args.materials}")
 
