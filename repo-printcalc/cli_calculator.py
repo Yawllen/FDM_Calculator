@@ -1,6 +1,5 @@
 
 # -*- coding: utf-8 -*-
-
 """
 CLI-версия 3D калькулятора печати (FDM)
 — быстрая серверная утилита без UI, 3MF/STL, точность = GUI-версии (всегда метод tetra)
@@ -119,10 +118,8 @@ from __future__ import annotations
 
 import os, sys, json, time, argparse
 
-BASE_DIR_FOR_IMPORT = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR_FOR_IMPORT and BASE_DIR_FOR_IMPORT not in sys.path:
-    sys.path.insert(0, BASE_DIR_FOR_IMPORT)
 
+import core_calc as core
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
 STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
@@ -136,18 +133,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 # импортируем ядро: геометрия, формулы, утилиты и форматтер отчёта
-import core_calc as core
+sys.path.append('/mnt/data')
+import calculator as core  # type: ignore
 
 # ---------- Утилиты ----------
-def deep_merge(dst: dict, src: dict) -> dict:
-    """Глубокое слияние словарей src в dst (in-place). Возвращает dst."""
-    for k, v in src.items():
-        if isinstance(v, dict) and isinstance(dst.get(k), dict):
-            deep_merge(dst[k], v)
-        else:
-            dst[k] = v
-    return dst
-
 def set_by_dotted_path(d: dict, path: str, value):
     """Устанавливает значение по точечному пути (например, 'printing.a1'). Создаёт вложенные словари при необходимости."""
     keys = path.split('.')
@@ -216,23 +205,10 @@ def load_pricing(path: str, override: dict | None = None) -> dict:
     if not isinstance(cfg, dict) or not cfg:
         raise SystemExit("[cli] pricing.json: ожидается объект конфигурации")
     if override:
-        deep_merge(cfg, override)
+        core.deep_merge(cfg, override)
     return cfg
 
 # ---------- Формулы времени и денег (идентичны GUI) ----------
-def status_block_text() -> str:
-    """Возвращает диагностический блок по последнему распарсенному файлу (единицы, статистика по items). Только для человека, не JSON-API."""
-    dets = core._last_status.get("det_values") or []
-    det_min = f"{min(dets):.3f}" if dets else "—"
-    det_max = f"{max(dets):.3f}" if dets else "—"
-    units = ", ".join(sorted(core._last_status.get("unit_set") or [])) or "millimeter"
-    return (f"Файл: {core._last_status.get('file','')}\n"
-            f"Единицы (из моделей): {units}\n"
-            f"Items: {core._last_status.get('item_count',0)} | Components: {core._last_status.get('component_count',0)} | p:path внешних: {core._last_status.get('external_p_path',0)}\n"
-            f"det по items: min={det_min}, max={det_max}\n"
-            "----------------------------------------\n")
-
-# ---------- Параллельная обработка одного файла ----------
 def _compute_one_file(path: str, *, materials_density: dict, price_per_gram: dict, pricing: dict,
                       material_name: str, infill: float, setup_min: float, post_min: float,
                       brief: bool, diag: bool) -> dict:
@@ -310,7 +286,7 @@ def _compute_one_file(path: str, *, materials_density: dict, price_per_gram: dic
         "total_rub": bd["total_with_min"],
         "total_rounded_rub": bd["total"],
         "rounding_step_rub": float(pricing.get("rounding_to_rub", 1.0)),
-        "diag_text": status_block_text() if diag else ""
+        "diag_text": core.status_block_text() if diag else ""
     }
     return res
 
@@ -483,7 +459,7 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
                 calc_time_s=calc_time_s,
                 brief=brief,
                 show_diag=diag,
-                diag_text=(core.status_block_text() if diag else "")
+                diag_text=core.status_block_text() if diag else ""
             )
             lines.append(report)
             lines.append("\n")
@@ -520,21 +496,20 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
         calc_time_s=calc_time_s,
         brief=brief,
         show_diag=diag,
-        diag_text=(core.status_block_text() if diag else "")
+        diag_text=core.status_block_text() if diag else ""
     )
     return {"text": report}
 
 # ---------- CLI ----------
 def main():
-
-    import sys
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-
     """Точка входа CLI. Парсит аргументы, загружает конфиги, валидирует материал, вызывает compute_for_files и печатает результат."""
+    # Windows/CP1251 safe output: не падаем на спецсимволах
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(description="CLI 3D калькулятор печати (FDM) — .3mf/.stl, без UI, идентичен GUI-логике")
     ap.add_argument('files', nargs='+', help='Пути к моделям .3mf / .stl')
     ap.add_argument('--materials', default='(ignored)', help='[ignored] materials.json всегда берётся из папки скрипта')
