@@ -1,5 +1,6 @@
 
 # -*- coding: utf-8 -*-
+
 """
 CLI-версия 3D калькулятора печати (FDM)
 — быстрая серверная утилита без UI, 3MF/STL, точность = GUI-версии (всегда метод tetra)
@@ -118,6 +119,10 @@ from __future__ import annotations
 
 import os, sys, json, time, argparse
 
+BASE_DIR_FOR_IMPORT = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR_FOR_IMPORT and BASE_DIR_FOR_IMPORT not in sys.path:
+    sys.path.insert(0, BASE_DIR_FOR_IMPORT)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
 STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
@@ -131,8 +136,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 # импортируем ядро: геометрия, формулы, утилиты и форматтер отчёта
-sys.path.append('/mnt/data')
-import calculator as core  # type: ignore
+import core_calc as core
 
 # ---------- Утилиты ----------
 def deep_merge(dst: dict, src: dict) -> dict:
@@ -216,88 +220,6 @@ def load_pricing(path: str, override: dict | None = None) -> dict:
     return cfg
 
 # ---------- Формулы времени и денег (идентичны GUI) ----------
-def estimate_time_hours_by_volume(pricing: dict, V_total_cm3: float) -> float:
-    """Оценивает время печати (ч) по эффективному объёму печати и параметрам производительности из pricing.printing."""
-    p = pricing.get("printing", {})
-    Q_mm3_s = (core.nz(p.get("print_speed_mm_s"), 100) * core.nz(p.get("line_width_mm"), 0.45) *
-               core.nz(p.get("layer_height_mm"), 0.20) * max(0.0, min(1.0, core.nz(p.get("utilization"), 0.85))))
-    if Q_mm3_s <= 0:
-        return 0.0
-    est_h = (core.nz(V_total_cm3) * 1000.0 * core.nz(p.get("travel_factor"), 1.0)) / (Q_mm3_s * 3600.0)
-    a0 = core.nz(p.get("a0"), 0.0); a1 = core.nz(p.get("a1"), 1.0)
-    return max(0.0, a0 + a1 * est_h)
-
-def calc_breakdown(pricing: dict, total_mat_cost: float, total_V_total_cm3: float, setup_min: float, postproc_min: float) -> dict:
-    """Считает разбиение стоимости: материал/энергия/амортизация/труд/резерв + порядок надбавок/НДС/минималка. Возвращает словарь полей для итогов."""
-    p = pricing
-    t_h = estimate_time_hours_by_volume(pricing, total_V_total_cm3)
-
-    power = p.get("power", {})
-    energy_cost = t_h * (core.nz(power.get("avg_power_w"), 0.0) / 1000.0) * core.nz(power.get("tariff_rub_per_kwh"), 0.0)
-    depreciation_cost = t_h * core.nz(p.get("depreciation_per_hour_rub"), 0.0)
-
-    labor = p.get("labor", {})
-    setup_billable_h = max(0.0, core.nz(setup_min) - core.nz(labor.get("setup_min_included"), 0.0)) / 60.0
-    post_h = core.nz(postproc_min) / 60.0
-    labor_cost = core.nz(labor.get("hour_rate_rub"), 0.0) * (setup_billable_h + post_h)
-
-    extras = p.get("extras", {})
-    consumables = core.nz(extras.get("consumables_rub"), 0.0)
-    fixed_overhead = core.nz(extras.get("fixed_overhead_rub"), 0.0)
-
-    non_material = energy_cost + depreciation_cost + labor_cost + consumables + fixed_overhead
-
-    risk_cfg = p.get("risk", {})
-    reserve = (non_material * (core.nz(risk_cfg.get("pct"),0.0) / 100.0)) if (risk_cfg.get("apply_to","non_material") == "non_material") else 0.0
-
-    subtotal = total_mat_cost + non_material + reserve
-
-    # Минимумы и наценки
-    min_order = core.nz(p.get("min_order_rub"), 0.0)
-    min_policy = p.get("min_policy", "final")
-
-    markup_pct = core.nz(p.get("markup_pct"),0.0)/100.0
-    fee_pct    = core.nz(p.get("service_fee_pct"),0.0)/100.0
-    vat_pct    = core.nz(p.get("vat_pct"),0.0)/100.0
-
-    if min_policy == "subtotal":
-        base_for_margin = max(min_order, subtotal)
-        min_applied = (min_order > subtotal)
-        markup = base_for_margin * markup_pct
-        after_markup = base_for_margin + markup
-        service_fee = after_markup * fee_pct
-        after_service = after_markup + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        total_raw = chain_total
-    elif min_policy == "after_markup":
-        markup = subtotal * markup_pct
-        after_markup = subtotal + markup
-        base2 = max(min_order, after_markup)
-        min_applied = (min_order > after_markup)
-        service_fee = base2 * fee_pct
-        after_service = base2 + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        total_raw = chain_total
-    else:  # "final"
-        markup = subtotal * markup_pct
-        after_markup = subtotal + markup
-        service_fee = after_markup * fee_pct
-        after_service = after_markup + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        min_applied = (min_order > chain_total)
-        total_raw = max(min_order, chain_total)
-
-    total = core.round_to_step(total_raw, p.get("rounding_to_rub", 1))
-    return {"time_h": t_h,
-            "energy_cost": energy_cost, "depreciation_cost": depreciation_cost, "labor_cost": labor_cost,
-            "consumables": consumables, "fixed_overhead": fixed_overhead, "non_material": non_material,
-            "reserve": reserve, "subtotal": subtotal, "markup": markup, "service_fee": service_fee, "vat": vat,
-            "total_raw": chain_total, "total_with_min": total_raw, "min_applied": bool(min_applied), "total": total}
-
-# ---------- Диагностика парсера ----------
 def status_block_text() -> str:
     """Возвращает диагностический блок по последнему распарсенному файлу (единицы, статистика по items). Только для человека, не JSON-API."""
     dets = core._last_status.get("det_values") or []
@@ -362,7 +284,7 @@ def _compute_one_file(path: str, *, materials_density: dict, price_per_gram: dic
         total_weight_g    += weight_g
         total_mat_cost    += mat_cost
 
-    bd = calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
+    bd = core.calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
 
     res = {
         "file": os.path.basename(path),
@@ -473,7 +395,7 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
                 total_weight_g    += weight_g
                 total_mat_cost    += mat_cost
 
-            bd = calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
+            bd = core.calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
 
             # агрегируем в общий итог
             grand["V_model_cm3"] += total_V_model_cm3
@@ -521,7 +443,7 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
         }
         if not per_object:
             # общий сводный расчёт по всем файлам как единой сборке
-            bd = calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
+            bd = core.calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
             payload["summary"] = {
                 "material": material_name,
                 "price_rub_per_g": price_g,
@@ -561,14 +483,14 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
                 calc_time_s=calc_time_s,
                 brief=brief,
                 show_diag=diag,
-                diag_text=status_block_text() if diag else ""
+                diag_text=(core.status_block_text() if diag else "")
             )
             lines.append(report)
             lines.append("\n")
         return {"text": "".join(lines).rstrip()}
 
     # сводная "Сборка (N объектов)"
-    bd = calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
+    bd = core.calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
     obj_name = f"Сборка ({len(results)} объектов)"
     report = core.render_report(
         file_name="; ".join([r["file"] for r in results]),
@@ -598,12 +520,20 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
         calc_time_s=calc_time_s,
         brief=brief,
         show_diag=diag,
-        diag_text=status_block_text() if diag else ""
+        diag_text=(core.status_block_text() if diag else "")
     )
     return {"text": report}
 
 # ---------- CLI ----------
 def main():
+
+    import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
     """Точка входа CLI. Парсит аргументы, загружает конфиги, валидирует материал, вызывает compute_for_files и печатает результат."""
     ap = argparse.ArgumentParser(description="CLI 3D калькулятор печати (FDM) — .3mf/.stl, без UI, идентичен GUI-логике")
     ap.add_argument('files', nargs='+', help='Пути к моделям .3mf / .stl')

@@ -1,34 +1,36 @@
 {
   "currency": "RUB",
-  "rounding_to_rub": 10,
-
+  "rounding_to_rub": 10.0,
   "min_policy": "final",
-  "min_order_rub": 380,
-
-  "vat_pct": 22,
-  "markup_pct": 25,
-  "service_fee_pct": 10,
-
-  "risk": { "pct": 10, "apply_to": "non_material" },
-
-  "power": { "tariff_rub_per_kwh": 4.7, "avg_power_w": 350 },
-
-  "depreciation_per_hour_rub": 50,
-
-  "labor": { "hour_rate_rub": 500, "setup_min_included": 10 },
-
+  "min_order_rub": 380.0,
+  "vat_pct": 22.0,
+  "markup_pct": 25.0,
+  "service_fee_pct": 10.0,
+  "risk": {
+    "pct": 10.0,
+    "apply_to": "non_material"
+  },
+  "power": {
+    "tariff_rub_per_kwh": 4.7,
+    "avg_power_w": 350.0
+  },
+  "depreciation_per_hour_rub": 50.0,
+  "labor": {
+    "hour_rate_rub": 500.0,
+    "setup_min_included": 10.0
+  },
   "printing": {
-    "print_speed_mm_s": 100,
+    "print_speed_mm_s": 100.0,
     "line_width_mm": 0.45,
-    "layer_height_mm": 0.20,
+    "layer_height_mm": 0.2,
     "utilization": 0.85,
     "travel_factor": 1.0,
     "a0": 0.0,
     "a1": 1.0
   },
-
-  "geometry": { "volume_factor": 0.8 },
-
+  "geometry": {
+    "volume_factor": 0.8
+  },
   "extras": {
     "fixed_overhead_rub": 0.0,
     "consumables_rub": 0.0

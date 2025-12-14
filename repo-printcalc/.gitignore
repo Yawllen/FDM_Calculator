@@ -1,20 +1,13 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
 
-# Virtual environments
-.venv/
-env/
-venv/
-ENV/
-*.env
+# local test models
+*.stl
+*.3mf
 
-# Packaging
-dist/
-build/
-*.egg-info/
-
-# IDE
-.vscode/
-.idea/
+# local folders
+Архив/
+Другие версии/
+temp/
