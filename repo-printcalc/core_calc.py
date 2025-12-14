@@ -67,6 +67,74 @@ def deep_merge(dst: dict, src: dict) -> dict:
     return dst
 
 
+# ---------- Config loading (единая правда для UI/CLI) ----------
+def get_default_config_dir() -> str:
+    """
+    Папка, относительно которой по умолчанию ищем materials.json / pricing.json.
+    Детерминированно: рядом с core_calc.py.
+    """
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_default_materials_path(config_dir: str | None = None) -> str:
+    base = config_dir or get_default_config_dir()
+    return os.path.join(base, "materials.json")
+
+
+def get_default_pricing_path(config_dir: str | None = None) -> str:
+    base = config_dir or get_default_config_dir()
+    return os.path.join(base, "pricing.json")
+
+
+def load_materials_json(path: str) -> tuple[dict, dict]:
+    """
+    materials.json -> (density_by_material, price_per_g_by_material)
+    Формат: { "Material": {"density_g_cm3": 1.2, "price_rub_per_g": 2.3}, ... }
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, dict) or not data:
+        raise ValueError("materials.json: expected object {material: {...}}")
+
+    density, price_g = {}, {}
+    for name, row in data.items():
+        if not isinstance(row, dict):
+            raise ValueError(f"materials.json: invalid row for '{name}'")
+        if "density_g_cm3" not in row or "price_rub_per_g" not in row:
+            raise ValueError(f"materials.json: '{name}' missing density_g_cm3/price_rub_per_g")
+        density[name] = float(row["density_g_cm3"])
+        price_g[name] = float(row["price_rub_per_g"])
+
+    return density, price_g
+
+
+def load_pricing_json(path: str, *, base: dict | None = None, override: dict | None = None) -> dict:
+    """
+    pricing.json -> pricing dict.
+    base: если задан, то в него мерджится файл (удобно для DEFAULT_PRICING).
+    override: мердж поверх результата (например, --set в CLI).
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    if not isinstance(cfg, dict) or not cfg:
+        raise ValueError("pricing.json: expected object")
+
+    out = json.loads(json.dumps(base)) if isinstance(base, dict) else {}
+    deep_merge(out, cfg)
+    if override:
+        deep_merge(out, override)
+    return out
+
+
+
 # ---------- Форматирование отчёта (общий для UI/CLI) ----------
 def render_report(*,
     file_name: str,
