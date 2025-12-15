@@ -66,6 +66,42 @@ def deep_merge(dst: dict, src: dict) -> dict:
             dst[k] = v
     return dst
 
+# ---------- Тираж (кол-во штук) ----------
+def coerce_qty(qty) -> int:
+    """
+    Приводит qty к int и валидирует (>=1).
+    Единая правда для UI/CLI: исключает отрицательные/нулевые значения и неявные типы.
+    """
+    try:
+        q = int(qty)
+    except Exception as e:
+        raise ValueError(f"qty must be int >= 1, got: {qty!r}") from e
+    if q < 1:
+        raise ValueError(f"qty must be int >= 1, got: {qty!r}")
+    return q
+
+
+def apply_qty_to_totals(
+    *,
+    volume_model_cm3: float,
+    volume_print_cm3: float,
+    weight_g: float,
+    material_cost: float,
+    qty: int,
+) -> tuple[float, float, float, float]:
+    """
+    Масштабирует переменные метрики на qty.
+    НЕ трогает setup/post/min-order (они per-order).
+    """
+    q = coerce_qty(qty)
+    mul = float(q)
+    return (
+        nz(volume_model_cm3) * mul,
+        nz(volume_print_cm3) * mul,
+        nz(weight_g) * mul,
+        nz(material_cost) * mul,
+    )
+
 
 # ---------- Config loading (единая правда для UI/CLI) ----------
 def get_default_config_dir() -> str:
@@ -158,7 +194,8 @@ def render_report(*,
     calc_time_s: float,
     brief: bool = True,
     show_diag: bool = False,
-    diag_text: str = ""
+    diag_text: str = "",
+    qty: int = 1
 ) -> str:
     head = []
     if show_diag and diag_text:

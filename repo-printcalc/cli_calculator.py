@@ -117,24 +117,15 @@ CLI-версия 3D калькулятора печати (FDM)
 from __future__ import annotations
 
 import os, sys, json, time, argparse
-
-
-import core_calc as core
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
-STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
-
-
-# === Strict config loading: always from script directory ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, 'materials.json')
-STRICT_PRICING_PATH   = os.path.join(BASE_DIR, 'pricing.json')
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 # импортируем ядро: геометрия, формулы, утилиты и форматтер отчёта
-sys.path.append('/mnt/data')
-import calculator as core  # type: ignore
+import core_calc as core
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, "materials.json")
+STRICT_PRICING_PATH   = os.path.join(BASE_DIR, "pricing.json")
 
 # ---------- Утилиты ----------
 def set_by_dotted_path(d: dict, path: str, value):
@@ -209,220 +200,244 @@ def load_pricing(path: str, override: dict | None = None) -> dict:
     return cfg
 
 # ---------- Формулы времени и денег (идентичны GUI) ----------
-def _compute_one_file(path: str, *, materials_density: dict, price_per_gram: dict, pricing: dict,
-                      material_name: str, infill: float, setup_min: float, post_min: float,
-                      brief: bool, diag: bool) -> dict:
-    """Процесс-воркер: считает один файл в отдельном процессе (изоляция состояния). Возвращает готовую запись для per_object массива."""
+def _compute_one_file(
+    path: str,
+    *,
+    materials_density: dict,
+    price_per_gram: dict,
+    pricing: dict,
+    material_name: str,
+    infill: float,
+    setup_min: float,
+    post_min: float,
+    qty: int,
+    brief: bool,
+    diag: bool,
+) -> dict:
+    """
+    Процесс-воркер: считает один файл.
+    Важно: состояние 3MF-парсера в core_calc глобальное, поэтому перед каждым файлом делаем сброс.
+    """
+    import time
+    import os
+
+    t0 = time.perf_counter()
+
     density = float(materials_density.get(material_name, 1.2))
     price_g = float(price_per_gram.get(material_name, 0.0))
 
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    # СБРОС ПЕРЕД МОДЕЛЬЮ (в процессе)
-    core._reset_parser_state()  # ВАЖНО: чистим любое глобальное/кэшированное состояние перед очередным файлом
+    # СБРОС ПЕРЕД МОДЕЛЬЮ
+    core._reset_parser_state()
     objs = core.parse_geometry(path)
 
-    vol_factor = float(pricing.get("geometry",{}).get("volume_factor", 1.0))
+    vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
 
     total_V_model_cm3 = 0.0
-    total_V_total_cm3 = 0.0
-    total_weight_g    = 0.0
-    total_mat_cost    = 0.0
+    total_V_print_cm3 = 0.0
+    total_weight_g = 0.0
+    total_mat_cost = 0.0
+
+    # Параметры печати — намеренно захардкожены (как в UI)
+    wall_count = 2
+    wall_width = 0.4
+    layer_height_geo = 0.2
+    top_bottom_layers = 4
+
+    # Определяем тип файла по распарсенным объектам
+    is_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     for _, V, T, vol_fast_cm3, srcinfo in objs:
-        # 1) объём модели
-        V_model = core.volume_tetra(V, T)
+        # 1) Объём модели (см³)
+        # Для 3MF используем быстрый объём с учётом transforms (как в UI).
+        if (srcinfo or {}).get("type") == "3mf" and vol_fast_cm3 and vol_fast_cm3 > 0:
+            V_model = float(vol_fast_cm3)
+        else:
+            V_model = float(core.volume_tetra(V, T))
 
-        # 2) стенки/крышки/заполнение
-        shell_area = core.surface_area_mesh(V, T)  # см²
-        xy_area = core.xy_area_bbox_from_V(V)      # см²
-        wall_count = 2; wall_width = 0.4; layer_height_geo = 0.2; top_bottom_layers = 4
+        # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
+        V_total = float(
+            core.compute_print_volume_cm3(
+                V_model_cm3=V_model,
+                V_mm=V,
+                T=T,
+                infill_pct=float(infill),
+                fast_only=False,
+                wall_count=wall_count,
+                wall_width=wall_width,
+                layer_height_geo=layer_height_geo,
+                top_bottom_layers=top_bottom_layers,
+            )
+        )
 
-        V_shell = shell_area * wall_count * wall_width / 10.0
-        V_top_bottom = xy_area * top_bottom_layers * layer_height_geo / 10.0
-        shell_total = V_shell + V_top_bottom
-        if shell_total > V_model * 0.6:
-            scale = (V_model * 0.6) / max(shell_total, 1e-12)
-            V_shell *= scale; V_top_bottom *= scale
-        V_infill = max(0.0, V_model - V_shell - V_top_bottom) * (infill / 100.0)
-        V_total = V_shell + V_top_bottom + V_infill
-
-        # 3) калибровка объёма
+        # 3) Калибровка объёма
         V_total *= vol_factor
 
-        # 4) вес/материал
+        # 4) Вес и материал
         weight_g = V_total * density
         mat_cost = weight_g * price_g
 
         total_V_model_cm3 += V_model
-        total_V_total_cm3 += V_total
-        total_weight_g    += weight_g
-        total_mat_cost    += mat_cost
+        total_V_print_cm3 += V_total
+        total_weight_g += weight_g
+        total_mat_cost += mat_cost
 
-    bd = core.calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
+    # Тираж: масштабируем переменные метрики на qty (setup/post/min-order остаются per-order)
+    total_V_model_cm3, total_V_print_cm3, total_weight_g, total_mat_cost = core.apply_qty_to_totals(
+        volume_model_cm3=total_V_model_cm3,
+        volume_print_cm3=total_V_print_cm3,
+        weight_g=total_weight_g,
+        material_cost=total_mat_cost,
+        qty=int(qty),
+    )
 
-    res = {
+    bd = core.calc_breakdown(pricing, total_mat_cost, total_V_print_cm3, setup_min, post_min)
+
+    calc_seconds = time.perf_counter() - t0
+
+    # diag только для 3MF (иначе у STL будет мусорный пустой блок "Файл:")
+    diag_text = ""
+    if diag and is_3mf:
+        diag_text = core.status_block_text()
+
+    return {
         "file": os.path.basename(path),
+        "qty": int(qty),
         "material": material_name,
         "price_rub_per_g": price_g,
-        "volume_model_cm3": total_V_model_cm3,
-        "volume_print_cm3": total_V_total_cm3,
-        "weight_g": total_weight_g,
-        "time_h": bd["time_h"],
+        "volume_model_cm3": float(total_V_model_cm3),
+        "volume_print_cm3": float(total_V_print_cm3),
+        "weight_g": float(total_weight_g),
+        "time_h": float(bd["time_h"]),
         "costs": {
-            "material": total_mat_cost,
-            "energy": bd["energy_cost"],
-            "depreciation": bd["depreciation_cost"],
-            "labor": bd["labor_cost"],
-            "reserve": bd["reserve"],
+            "material": float(total_mat_cost),
+            "energy": float(bd["energy_cost"]),
+            "depreciation": float(bd["depreciation_cost"]),
+            "labor": float(bd["labor_cost"]),
+            "reserve": float(bd["reserve"]),
         },
-        "subtotal_rub": bd["subtotal"],
+        "subtotal_rub": float(bd["subtotal"]),
         "min_order_rub": float(pricing.get("min_order_rub", 0.0)),
-        "min_applied": bd["min_applied"],
-        "markup_rub": bd["markup"],
-        "platform_fee_rub": bd["service_fee"],
-        "vat_rub": bd["vat"],
-        "total_rub": bd["total_with_min"],
-        "total_rounded_rub": bd["total"],
+        "min_applied": bool(bd["min_applied"]),
+        "markup_rub": float(bd["markup"]),
+        "platform_fee_rub": float(bd["service_fee"]),
+        "vat_rub": float(bd["vat"]),
+        "total_rub": float(bd["total_with_min"]),
+        "total_rounded_rub": float(bd["total"]),
         "rounding_step_rub": float(pricing.get("rounding_to_rub", 1.0)),
-        "diag_text": core.status_block_text() if diag else ""
+        "calc_seconds": float(calc_seconds),
+        "diag_text": diag_text,
     }
-    return res
+
 
 # ---------- Расчёт набора файлов ----------
-def compute_for_files(files: List[str], *, materials_density: dict, price_per_gram: dict, pricing: dict,
-                      material_name: str, infill: float, setup_min: float, post_min: float,
-                      brief: bool, diag: bool, per_object: bool, as_json: bool, workers: int = 1) -> dict:
-    """Высокоуровневая функция: считает набор файлов с опциональной параллелью. Формирует JSON payload или текстовый отчёт."""
+def compute_for_files(
+    files: List[str],
+    *,
+    materials_density: dict,
+    price_per_gram: dict,
+    pricing: dict,
+    material_name: str,
+    infill: float,
+    setup_min: float,
+    post_min: float,
+    qty: int,
+    brief: bool,
+    diag: bool,
+    per_object: bool,
+    as_json: bool,
+    workers: int = 1,
+) -> dict:
+    """
+    Высокоуровневая функция: считает набор файлов с опциональной параллелью.
+    Возвращает либо JSON payload (as_json=True), либо {"text": "..."}.
+    Важно: бизнес-логика расчёта (геометрия/объёмы/ценообразование) живёт в core_calc.
+    """
     t0 = time.time()
-    density = float(materials_density.get(material_name, 1.2))
-    price_g = float(price_per_gram.get(material_name, 0.0))
 
-    results = []
+    # Нормализация входных значений (защита от мусора/отрицательных значений)
+    infill = float(max(0.0, min(100.0, float(infill))))
+    setup_min = float(max(0.0, float(setup_min)))
+    post_min = float(max(0.0, float(post_min)))
+    qty = int(core.coerce_qty(qty))
+
+    results: List[dict] = []
     grand = {"V_model_cm3": 0.0, "V_print_cm3": 0.0, "weight_g": 0.0, "material_cost": 0.0}
 
+    file_list = list(files)
+
     # Параллель: по файлам, только если файлов>1 и workers>1
-    if workers and workers > 1 and len(files) > 1:
-        file_list = list(files)
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+    if workers and workers > 1 and len(file_list) > 1:
+        with ProcessPoolExecutor(max_workers=int(workers)) as ex:
             futs = [
                 ex.submit(
-                    _compute_one_file, p,
-                    materials_density=materials_density, price_per_gram=price_per_gram, pricing=pricing,
-                    material_name=material_name, infill=infill, setup_min=setup_min, post_min=post_min,
-                    brief=brief, diag=diag
-                ) for p in file_list
+                    _compute_one_file,
+                    p,
+                    materials_density=materials_density,
+                    price_per_gram=price_per_gram,
+                    pricing=pricing,
+                    material_name=material_name,
+                    infill=infill,
+                    setup_min=setup_min,
+                    post_min=post_min,
+                    qty=qty,
+                    brief=brief,
+                    diag=diag,
+                )
+                for p in file_list
             ]
             for fut in as_completed(futs):
                 results.append(fut.result())
+
         # стабильный порядок для вывода/тестов
-        results.sort(key=lambda r: r["file"])  # Детерминированный вывод и агрегация
-
-        for r in results:
-            grand["V_model_cm3"] += r["volume_model_cm3"]
-            grand["V_print_cm3"] += r["volume_print_cm3"]
-            grand["weight_g"]    += r["weight_g"]
-            grand["material_cost"] += r["costs"]["material"]  # материал=сумма по объектам
+        results.sort(key=lambda r: r["file"])
     else:
-        for path in files:
-            if not os.path.exists(path):
-                raise FileNotFoundError(path)
+        # Последовательная обработка тем же кодом, что и в воркере (один источник правды)
+        for p in file_list:
+            results.append(
+                _compute_one_file(
+                    p,
+                    materials_density=materials_density,
+                    price_per_gram=price_per_gram,
+                    pricing=pricing,
+                    material_name=material_name,
+                    infill=infill,
+                    setup_min=setup_min,
+                    post_min=post_min,
+                    qty=qty,
+                    brief=brief,
+                    diag=diag,
+                )
+            )
 
-            # СБРОС ПЕРЕД КАЖДОЙ МОДЕЛЬЮ
-            core._reset_parser_state()  # ВАЖНО: чистим любое глобальное/кэшированное состояние перед очередным файлом
-
-            objs = core.parse_geometry(path)  # гарант. сброс и внутри
-
-            vol_factor = float(pricing.get("geometry",{}).get("volume_factor", 1.0))
-
-            total_V_model_cm3 = 0.0
-            total_V_total_cm3 = 0.0
-            total_weight_g    = 0.0
-            total_mat_cost    = 0.0
-
-            for _, V, T, vol_fast_cm3, src in objs:
-                # 1) объём модели
-                V_model = core.volume_tetra(V, T)
-
-                # 2) разбиение на стенки/крышки/заполнение (как в GUI)
-                shell_area = core.surface_area_mesh(V, T)  # см²
-                xy_area = core.xy_area_bbox_from_V(V)      # см²
-                wall_count = 2; wall_width = 0.4; layer_height_geo = 0.2; top_bottom_layers = 4
-
-                V_shell = shell_area * wall_count * wall_width / 10.0
-                V_top_bottom = xy_area * top_bottom_layers * layer_height_geo / 10.0
-                shell_total = V_shell + V_top_bottom
-                if shell_total > V_model * 0.6:
-                    scale = (V_model * 0.6) / max(shell_total, 1e-12)
-                    V_shell *= scale; V_top_bottom *= scale
-                V_infill = max(0.0, V_model - V_shell - V_top_bottom) * (infill / 100.0)
-                V_total = V_shell + V_top_bottom + V_infill
-
-                # 3) калибровка объёма
-                V_total *= vol_factor
-
-                # 4) вес/материал
-                weight_g = V_total * density
-                mat_cost = weight_g * price_g
-
-                total_V_model_cm3 += V_model
-                total_V_total_cm3 += V_total
-                total_weight_g    += weight_g
-                total_mat_cost    += mat_cost
-
-            bd = core.calc_breakdown(pricing, total_mat_cost, total_V_total_cm3, setup_min, post_min)
-
-            # агрегируем в общий итог
-            grand["V_model_cm3"] += total_V_model_cm3
-            grand["V_print_cm3"] += total_V_total_cm3
-            grand["weight_g"]    += total_weight_g
-            grand["material_cost"] += total_mat_cost
-
-            res = {
-                "file": os.path.basename(path),
-                "material": material_name,
-                "price_rub_per_g": price_g,
-                "volume_model_cm3": total_V_model_cm3,
-                "volume_print_cm3": total_V_total_cm3,
-                "weight_g": total_weight_g,
-                "time_h": bd["time_h"],
-                "costs": {
-                    "material": total_mat_cost,
-                    "energy": bd["energy_cost"],
-                    "depreciation": bd["depreciation_cost"],
-                    "labor": bd["labor_cost"],
-                    "reserve": bd["reserve"],
-                },
-                "subtotal_rub": bd["subtotal"],
-                "min_order_rub": float(pricing.get("min_order_rub", 0.0)),
-                "min_applied": bd["min_applied"],
-                "markup_rub": bd["markup"],
-                "platform_fee_rub": bd["service_fee"],
-                "vat_rub": bd["vat"],
-                "total_rub": bd["total_with_min"],
-                "total_rounded_rub": bd["total"],
-                "rounding_step_rub": float(pricing.get("rounding_to_rub", 1.0)),
-            }
-            results.append(res)
+    # Аггрегация общих метрик (без повторного применения setup/post/min-order)
+    for r in results:
+        grand["V_model_cm3"] += float(r.get("volume_model_cm3", 0.0))
+        grand["V_print_cm3"] += float(r.get("volume_print_cm3", 0.0))
+        grand["weight_g"] += float(r.get("weight_g", 0.0))
+        costs = r.get("costs") or {}
+        grand["material_cost"] += float(costs.get("material", 0.0))
 
     calc_time_s = time.time() - t0
 
-    # Формирование вывода
+    # ---------- JSON ----------
     if as_json:
         payload = {
             "success": True,
+            "qty": int(qty),
             "count": len(results),
             "per_object": results if per_object else None,
             "summary": None,
             "time_s": calc_time_s,
         }
         if not per_object:
-            # общий сводный расчёт по всем файлам как единой сборке
             bd = core.calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
             payload["summary"] = {
+                "qty": int(qty),
                 "material": material_name,
-                "price_rub_per_g": price_g,
+                "price_rub_per_g": float(price_per_gram.get(material_name, 0.0)),
                 "volume_model_cm3": grand["V_model_cm3"],
                 "volume_print_cm3": grand["V_print_cm3"],
                 "weight_g": grand["weight_g"],
@@ -433,7 +448,7 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
             }
         return payload
 
-    # Текстовый отчёт
+    # ---------- TEXT ----------
     lines: List[str] = []
     if per_object:
         for r in results:
@@ -457,9 +472,10 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
                 total_rounded_rub=r["total_rounded_rub"],
                 rounding_step_rub=r["rounding_step_rub"],
                 calc_time_s=calc_time_s,
+                qty=int(qty),
                 brief=brief,
                 show_diag=diag,
-                diag_text=core.status_block_text() if diag else ""
+                diag_text=r.get("diag_text", "") if diag else "",
             )
             lines.append(report)
             lines.append("\n")
@@ -468,11 +484,19 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
     # сводная "Сборка (N объектов)"
     bd = core.calc_breakdown(pricing, grand["material_cost"], grand["V_print_cm3"], setup_min, post_min)
     obj_name = f"Сборка ({len(results)} объектов)"
+
+    # Диагностика: берём из результатов (в workers>1 главный процесс не парсил файлы)
+    diag_join = ""
+    if diag:
+        parts = [str(r.get("diag_text", "")).rstrip() for r in results if r.get("diag_text")]
+        if parts:
+            diag_join = "\n".join(parts) + "\n"
+
     report = core.render_report(
         file_name="; ".join([r["file"] for r in results]),
         obj_name=obj_name,
         material_name=material_name,
-        price_per_g=price_g,
+        price_per_g=float(price_per_gram.get(material_name, 0.0)),
         volume_model_cm3=grand["V_model_cm3"],
         volume_print_cm3=grand["V_print_cm3"],
         weight_g=grand["weight_g"],
@@ -494,9 +518,10 @@ def compute_for_files(files: List[str], *, materials_density: dict, price_per_gr
         total_rounded_rub=bd["total"],
         rounding_step_rub=float(pricing.get("rounding_to_rub", 1.0)),
         calc_time_s=calc_time_s,
+        qty=int(qty),
         brief=brief,
         show_diag=diag,
-        diag_text=core.status_block_text() if diag else ""
+        diag_text=diag_join,
     )
     return {"text": report}
 
@@ -520,6 +545,7 @@ def main():
     ap.add_argument('--infill', type=float, default=10.0, help='% заполнения (0-100)')
     ap.add_argument('--setup-min', type=float, default=10.0, help='Подготовка (мин)')
     ap.add_argument('--post-min',  type=float, default=0.0,  help='Постпроцесс (мин)')
+    ap.add_argument('--qty', type=int, default=1, help='Количество одинаковых комплектов моделей (тираж). Цена считается за заказ.')
 
     fmt = ap.add_mutually_exclusive_group()
     fmt.add_argument('--json', action='store_true', help='Вывод в JSON')
@@ -531,6 +557,16 @@ def main():
     ap.add_argument('--workers', type=int, default=1, help='Процессы для параллельной обработки файлов (>1 — включить мультипроцессинг)')
 
     args = ap.parse_args()
+
+    try:
+        args.qty = core.coerce_qty(args.qty)
+    except Exception as e:
+        raise SystemExit(f"Неверное значение --qty: {e}")
+
+    # Нормализуем числовые параметры (CLI может дать отрицательные значения)
+    args.infill = float(max(0.0, min(100.0, args.infill)))
+    args.setup_min = float(max(0.0, args.setup_min))
+    args.post_min = float(max(0.0, args.post_min))
 
     # загрузка конфигов
     print(f"[cli] using materials: {STRICT_MATERIALS_PATH}", file=sys.stderr)
@@ -544,12 +580,13 @@ def main():
     if not material:
         material = sorted(dens.keys())[0]
     if material not in dens:
-        raise SystemExit(f"Материал '{material}' не найден в {args.materials}")
+        raise SystemExit(f"Материал '{material}' не найден в {STRICT_MATERIALS_PATH}")
 
     payload = compute_for_files(
         args.files,
         materials_density=dens, price_per_gram=priceg, pricing=pricing,
         material_name=material, infill=args.infill, setup_min=args.setup_min, post_min=args.post_min,
+        qty=int(args.qty),
         brief=bool(args.brief), diag=bool(args.diag),
         per_object=bool(args.per_object), as_json=bool(args.json), workers=int(max(1, args.workers))
     )
