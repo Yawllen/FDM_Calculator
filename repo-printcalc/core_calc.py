@@ -299,23 +299,31 @@ def _unit_to_mm(unit_str: str) -> float:
 
 
 def _parse_transform(s: str | None) -> np.ndarray:
+    """
+    Контракт математики для 3MF-transform:
+    - transform = 12 чисел: m00 m01 m02 m03 m10 m11 m12 m13 m20 m21 m22 m23 (3×4, перенос в 4-й колонке).
+    - Вершины представлены row-vectors (N,3); применение делаем через гомогенные координаты Vh @ M.T.
+    - Композиция вложенных матриц: M_world = M_parent @ M_local (совместимо с _apply_transform).
+    """
     if not s:
         return np.eye(4, dtype=np.float64)
     vals = [float(x) for x in s.replace(',', ' ').split()]
     if len(vals) != 12:
         return np.eye(4, dtype=np.float64)
-    m00, m01, m02, m10, m11, m12, m20, m21, m22, m30, m31, m32 = vals
+    m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23 = vals
     return np.array([
-        [m00, m01, m02, 0.0],
-        [m10, m11, m12, 0.0],
-        [m20, m21, m22, 0.0],
-        [m30, m31, m32, 1.0],
+        [m00, m01, m02, m03],
+        [m10, m11, m12, m13],
+        [m20, m21, m22, m23],
+        [0.0, 0.0, 0.0, 1.0],
     ], dtype=np.float64)
 
 
 def _apply_transform(V_mm: np.ndarray, M: np.ndarray) -> np.ndarray:
-    R = M[:3, :3]; t = M[3, :3]
-    return V_mm @ R + t
+    if V_mm.size == 0:
+        return V_mm
+    R = M[:3, :3]; t = M[:3, 3]
+    return V_mm @ R.T + t
 
 
 def _detect_and_set_namespace(root: ET.Element) -> None:
@@ -442,6 +450,7 @@ def _flatten_object_cached(cache: dict, model_file: str, oid: str, cum_M: np.nda
 
     out_V, out_T, offset, vol_mm3_fast = [], [], 0, 0.0
     for child_model, child_oid, Mchild in comps.get(oid, []):
+        # Составляем матрицы как M_world = M_parent @ M_local (см. контракт в _parse_transform).
         cum_next = cum_M @ Mchild
         Vc, Tc, vc = _flatten_object_cached(cache, child_model, child_oid, cum_next)
         if Vc.size == 0 or Tc.size == 0:
@@ -500,36 +509,85 @@ def parse_3mf(path: str):
     return data
 
 
+_ASCII_STL_MESSAGE = "ASCII STL detected; export the file as Binary STL"
+
+
+def _looks_like_ascii_stl(prefix: bytes) -> bool:
+    stripped = prefix.lstrip()
+    if not stripped.lower().startswith(b"solid"):
+        return False
+    try:
+        text = prefix.decode("utf-8", errors="ignore").lower()
+    except Exception:
+        return False
+    return ("facet" in text) and ("vertex" in text)
+
+
+def _read_and_validate_binary_stl(path: str) -> int:
+    file_size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        prefix = f.read(8192)
+        ascii_like = _looks_like_ascii_stl(prefix)
+        header = prefix[:80]
+        count_bytes = prefix[80:84]
+
+    if len(header) < 80 or len(count_bytes) < 4:
+        if ascii_like:
+            raise ValueError(_ASCII_STL_MESSAGE)
+        raise ValueError("Malformed binary STL: file too small")
+
+    try:
+        count = struct.unpack("<I", count_bytes)[0]
+    except struct.error as e:
+        raise ValueError(f"Malformed binary STL: cannot read triangle count ({e})") from None
+
+    expected_size = 84 + 50 * count
+    if expected_size == file_size:
+        return count
+
+    if ascii_like:
+        raise ValueError(_ASCII_STL_MESSAGE)
+    raise ValueError(f"Malformed binary STL: expected {expected_size} bytes, got {file_size}")
+
+
 def stl_stream_volume_cm3(path: str) -> float:
-    with open(path, 'rb') as f:
-        f.seek(80); count = struct.unpack('<I', f.read(4))[0]
-        total6 = 0.0
-        for _ in range(count):
-            f.read(12)
-            v0 = struct.unpack('<fff', f.read(12))
-            v1 = struct.unpack('<fff', f.read(12))
-            v2 = struct.unpack('<fff', f.read(12))
-            cx = (v1[1]*v2[2] - v1[2]*v2[1])
-            cy = (v1[2]*v2[0] - v1[0]*v2[2])
-            cz = (v1[0]*v2[1] - v1[1]*v2[0])
-            total6 += v0[0]*cx + v0[1]*cy + v0[2]*cz
-            f.read(2)
+    count = _read_and_validate_binary_stl(path)
+    try:
+        with open(path, 'rb') as f:
+            f.seek(84)
+            total6 = 0.0
+            for _ in range(count):
+                f.read(12)
+                v0 = struct.unpack('<fff', f.read(12))
+                v1 = struct.unpack('<fff', f.read(12))
+                v2 = struct.unpack('<fff', f.read(12))
+                cx = (v1[1]*v2[2] - v1[2]*v2[1])
+                cy = (v1[2]*v2[0] - v1[0]*v2[2])
+                cz = (v1[0]*v2[1] - v1[1]*v2[0])
+                total6 += v0[0]*cx + v0[1]*cy + v0[2]*cz
+                f.read(2)
+    except struct.error as e:
+        raise ValueError(f"Malformed binary STL: failed to read triangle data ({e})") from None
     vol_mm3 = abs(total6) / 6.0
     return vol_mm3 / 1000.0
 
 
 def parse_stl(path: str):
+    count = _read_and_validate_binary_stl(path)
     verts, tris, idx_map = [], [], {}
-    with open(path, 'rb') as f:
-        f.seek(80); count = struct.unpack('<I', f.read(4))[0]
-        for _ in range(count):
-            f.read(12); face = []
-            for _ in range(3):
-                xyz = struct.unpack('<fff', f.read(12))
-                if xyz not in idx_map:
-                    idx_map[xyz] = len(verts); verts.append(xyz)
-                face.append(idx_map[xyz])
-            tris.append(tuple(face)); f.read(2)
+    try:
+        with open(path, 'rb') as f:
+            f.seek(84)
+            for _ in range(count):
+                f.read(12); face = []
+                for _ in range(3):
+                    xyz = struct.unpack('<fff', f.read(12))
+                    if xyz not in idx_map:
+                        idx_map[xyz] = len(verts); verts.append(xyz)
+                    face.append(idx_map[xyz])
+                tris.append(tuple(face)); f.read(2)
+    except struct.error as e:
+        raise ValueError(f"Malformed binary STL: failed to read triangle data ({e})") from None
     V = np.array(verts, dtype=np.float64); T = np.array(tris, dtype=np.int32)
     vol_fast_cm3 = volume_tetra(V, T)
     return [("STL model", V, T, vol_fast_cm3, {'type': 'stl', 'path': path})]
