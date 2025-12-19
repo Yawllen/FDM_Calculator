@@ -289,6 +289,12 @@ def volume_bbox(V_mm: np.ndarray) -> float:
 # ---------- 3MF / STL ----------
 NAMESPACE = {'ns': 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'}
 NS_PROD   = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'
+MAX_3MF_ENTRY_BYTES = 25 * 1024 * 1024
+MAX_3MF_TOTAL_XML_BYTES = 50 * 1024 * 1024
+MAX_3MF_OBJECTS = 20000
+MAX_3MF_COMPONENTS = 200000
+MAX_3MF_VERTICES = 20_000_000
+MAX_3MF_TRIANGLES = 40_000_000
 
 
 def _unit_to_mm(unit_str: str) -> float:
@@ -365,12 +371,18 @@ def status_block_text() -> str:
             "----------------------------------------\n")
 
 
-def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str):
+def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, limits_state: dict):
     meshes_mm: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     comps_map: Dict[str, List[Tuple[str, str, np.ndarray]]] = {}
     base_vol_mm3: Dict[str, float] = {}
 
+    def _check_limit(kind: str, count: int, limit: int, label: str) -> None:
+        if count > limit:
+            raise ValueError(f"3MF limit exceeded: {kind} {count} > {limit} ({label})")
+
     for obj in root.findall('.//ns:object', NAMESPACE):
+        limits_state["objects"] += 1
+        _check_limit("objects", limits_state["objects"], MAX_3MF_OBJECTS, "MAX_3MF_OBJECTS")
         oid = obj.get('id')
         mesh = obj.find('ns:mesh', NAMESPACE)
         if mesh is not None:
@@ -378,6 +390,8 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str):
             verts = []
             if vs is not None:
                 for v in vs.findall('ns:vertex', NAMESPACE):
+                    limits_state["vertices"] += 1
+                    _check_limit("vertices", limits_state["vertices"], MAX_3MF_VERTICES, "MAX_3MF_VERTICES")
                     verts.append((float(v.get('x', '0')) * unit_scale_mm,
                                   float(v.get('y', '0')) * unit_scale_mm,
                                   float(v.get('z', '0')) * unit_scale_mm))
@@ -387,6 +401,8 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str):
             tris = []
             if ts is not None:
                 for t in ts.findall('ns:triangle', NAMESPACE):
+                    limits_state["triangles"] += 1
+                    _check_limit("triangles", limits_state["triangles"], MAX_3MF_TRIANGLES, "MAX_3MF_TRIANGLES")
                     tris.append((int(t.get('v1', '0')),
                                  int(t.get('v2', '0')),
                                  int(t.get('v3', '0'))))
@@ -398,6 +414,8 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str):
             comps_node = obj.find('ns:components', NAMESPACE)
             if comps_node is not None:
                 for c in comps_node.findall('ns:component', NAMESPACE):
+                    limits_state["components"] += 1
+                    _check_limit("components", limits_state["components"], MAX_3MF_COMPONENTS, "MAX_3MF_COMPONENTS")
                     ref = c.get('objectid')
                     M = _parse_transform(c.get('transform'))
                     p_path = c.get(f'{{{NS_PROD}}}path') or c.get('path')
@@ -410,6 +428,8 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str):
 def _build_model_cache(zf: zipfile.ZipFile):
     cache = {}
     model_files = [f for f in zf.namelist() if f.startswith('3D/') and f.endswith('.model')]
+    total_xml_bytes = 0
+    limits_state = {"objects": 0, "components": 0, "vertices": 0, "triangles": 0}
 
     _last_status["unit_set"].clear()
     _last_status["item_count"] = 0
@@ -418,11 +438,22 @@ def _build_model_cache(zf: zipfile.ZipFile):
     _last_status["det_values"].clear()
 
     for mf in model_files:
+        info = zf.getinfo(mf)
+        if info.file_size > MAX_3MF_ENTRY_BYTES:
+            raise ValueError(
+                f"3MF too large: {mf} exceeds limit {MAX_3MF_ENTRY_BYTES} bytes (MAX_3MF_ENTRY_BYTES)"
+            )
+        total_xml_bytes += info.file_size
+        if total_xml_bytes > MAX_3MF_TOTAL_XML_BYTES:
+            raise ValueError(
+                "3MF too large: total XML bytes "
+                f"{total_xml_bytes} exceeds limit {MAX_3MF_TOTAL_XML_BYTES} (MAX_3MF_TOTAL_XML_BYTES)"
+            )
         root = ET.fromstring(zf.read(mf))
         _detect_and_set_namespace(root)
         unit_scale = _unit_to_mm(root.get('unit'))
         _last_status["unit_set"].add(root.get('unit') or 'millimeter')
-        meshes_mm, comps_map, base_vol_mm3 = _gather_model_mm(root, unit_scale, mf)
+        meshes_mm, comps_map, base_vol_mm3 = _gather_model_mm(root, unit_scale, mf, limits_state)
         _last_status["component_count"] += sum(len(v) for v in comps_map.values())
         for lst in comps_map.values():
             for child_model, _, _ in lst:
