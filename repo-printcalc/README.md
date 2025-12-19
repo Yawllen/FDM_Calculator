@@ -6,6 +6,21 @@ It is a thin wrapper over `core_calc.py`, which owns geometry parsing, pricing r
 Both the CLI and the UI load the same configuration files and call the shared core.
 This means CLI output is always aligned with the UI’s calculation logic.
 
+## Установка (Windows PowerShell)
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+## CLI quickstart
+```bash
+python cli_calculator.py model.stl --material "PLA"
+```
+
+## Тесты (Windows PowerShell)
+```powershell
+pytest -q
+```
+
 ## Usage
 
 Single file (text output by default):
