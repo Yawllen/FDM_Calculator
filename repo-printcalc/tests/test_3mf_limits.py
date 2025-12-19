@@ -18,7 +18,7 @@ def test_3mf_rejects_large_model_entry(tmp_path):
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("3D/3dmodel.model", big_payload)
 
-    with pytest.raises(ValueError, match=r"too large|exceeds limit"):
+    with pytest.raises(ValueError, match=r"3MF limit exceeded|limit exceeded"):
         core_calc.parse_geometry(str(path))
 
 
