@@ -14,6 +14,7 @@ core_calc.py — чистое ядро 3D калькулятора печати 
 from __future__ import annotations
 
 import os
+import posixpath
 from collections import OrderedDict
 import struct
 import zipfile
@@ -469,7 +470,13 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
 
 
 def _norm_model_path(path: str) -> str:
-    return (path or "").replace("\\", "/").lstrip("/")
+    if not path:
+        return ""
+    path = path.replace("\\", "/").lstrip("/")
+    path = posixpath.normpath(path)
+    if path.startswith(".."):
+        raise ValueError("3MF contains invalid model path outside archive")
+    return path
 
 
 def _build_model_cache(zf: zipfile.ZipFile):
