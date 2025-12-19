@@ -264,21 +264,18 @@ def _compute_one_file(
     layer_height_geo = 0.2
     top_bottom_layers = 4
 
-    # Определяем тип файла по распарсенным объектам
-    is_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
-
     for _, V, T, vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
-        # Для 3MF используем быстрый объём с учётом transforms (как в UI).
+        # Для 3MF в fast-режиме используем предрасчитанный объём с учётом transforms.
+        meta_for_volume = dict(srcinfo or {})
         if (
             volume_mode == "fast"
-            and (srcinfo or {}).get("type") == "3mf"
+            and meta_for_volume.get("type") == "3mf"
             and vol_fast_cm3
             and vol_fast_cm3 > 0
         ):
-            V_model = float(vol_fast_cm3)
-        else:
-            V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=srcinfo or {}))
+            meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
+        V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
         V_total = float(
@@ -322,7 +319,7 @@ def _compute_one_file(
 
     # diag только для 3MF (иначе у STL будет мусорный пустой блок "Файл:")
     diag_text = ""
-    if diag and is_3mf:
+    if diag and any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs):
         diag_text = core.status_block_text()
 
     return {

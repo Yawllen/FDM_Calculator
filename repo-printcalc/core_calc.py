@@ -291,6 +291,10 @@ def volume_bbox(V_mm: np.ndarray) -> float:
 def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict) -> float:
     mode_norm = (mode or "").strip().lower()
     if mode_norm == "fast":
+        meta = meta or {}
+        precomputed = meta.get("precomputed_volume_cm3")
+        if precomputed is not None and precomputed > 0:
+            return float(precomputed)
         if V_mm.size == 0 or T.size == 0:
             return 0.0
         return volume_tetra(V_mm, T)
