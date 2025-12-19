@@ -4,8 +4,6 @@ __pycache__/
 *.pyd
 
 # local test models
-*.stl
-*.3mf
 
 # local folders
 Архив/
