@@ -288,6 +288,24 @@ def volume_bbox(V_mm: np.ndarray) -> float:
     return (dx * dy * dz) / 1000.0
 
 
+def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict) -> float:
+    mode_norm = (mode or "").strip().lower()
+    if mode_norm == "fast":
+        if V_mm.size == 0 or T.size == 0:
+            return 0.0
+        return volume_tetra(V_mm, T)
+    if mode_norm == "bbox":
+        if V_mm.size == 0:
+            return 0.0
+        return volume_bbox(V_mm)
+    if mode_norm == "stream":
+        meta = meta or {}
+        if meta.get("type") != "stl" or not meta.get("path"):
+            raise ValueError("volume-mode=stream is supported only for binary STL")
+        return stl_stream_volume_cm3(meta["path"])
+    raise ValueError(f"Unknown volume-mode: {mode}")
+
+
 # ---------- 3MF / STL ----------
 NAMESPACE = {'ns': 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'}
 NS_PROD   = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'

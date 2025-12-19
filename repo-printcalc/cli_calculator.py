@@ -228,6 +228,7 @@ def _compute_one_file(
     setup_min: float,
     post_min: float,
     qty: int,
+    volume_mode: str,
     brief: bool,
     diag: bool,
 ) -> dict:
@@ -266,13 +267,10 @@ def _compute_one_file(
     # Определяем тип файла по распарсенным объектам
     is_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
-    for _, V, T, vol_fast_cm3, srcinfo in objs:
+    for _, V, T, _vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
         # Для 3MF используем быстрый объём с учётом transforms (как в UI).
-        if (srcinfo or {}).get("type") == "3mf" and vol_fast_cm3 and vol_fast_cm3 > 0:
-            V_model = float(vol_fast_cm3)
-        else:
-            V_model = float(core.volume_tetra(V, T))
+        V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=srcinfo or {}))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
         V_total = float(
@@ -366,6 +364,7 @@ def compute_for_files(
     per_object: bool,
     as_json: bool,
     workers: int = 1,
+    volume_mode: str = "fast",
     errors: List[dict] | None = None,
 ) -> dict:
     """
@@ -402,6 +401,7 @@ def compute_for_files(
                     setup_min=setup_min,
                     post_min=post_min,
                     qty=qty,
+                    volume_mode=volume_mode,
                     brief=brief,
                     diag=diag,
                 ): p
@@ -431,6 +431,7 @@ def compute_for_files(
                         setup_min=setup_min,
                         post_min=post_min,
                         qty=qty,
+                        volume_mode=volume_mode,
                         brief=brief,
                         diag=diag,
                     )
@@ -573,6 +574,12 @@ def main():
     ap.add_argument('--setup-min', type=float, default=10.0, help='Подготовка (мин)')
     ap.add_argument('--post-min',  type=float, default=0.0,  help='Постпроцесс (мин)')
     ap.add_argument('--qty', type=int, default=1, help='Количество одинаковых комплектов моделей (тираж). Цена считается за заказ.')
+    ap.add_argument(
+        '--volume-mode',
+        choices=['fast', 'stream', 'bbox'],
+        default='fast',
+        help='Режим расчёта объёма: fast (tetra), stream (только бинарный STL), bbox (по габаритам).',
+    )
 
     fmt = ap.add_mutually_exclusive_group()
     fmt.add_argument('--json', action='store_true', help='Вывод в JSON')
@@ -631,6 +638,7 @@ def main():
             brief=bool(args.brief), diag=bool(args.diag),
             per_object=bool(args.per_object), as_json=bool(args.json),
             workers=int(max(1, args.workers)),
+            volume_mode=str(args.volume_mode),
             errors=errors,
         )
     except Exception as e:
