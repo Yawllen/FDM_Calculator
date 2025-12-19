@@ -471,6 +471,7 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
 def _build_model_cache(zf: zipfile.ZipFile):
     cache = {}
     model_files = [f for f in zf.namelist() if f.startswith('3D/') and f.endswith('.model')]
+    referenced_model_files = set()
     total_xml_bytes = 0
     limits_state = {"objects": 0, "components": 0, "vertices": 0, "triangles": 0}
 
@@ -497,9 +498,19 @@ def _build_model_cache(zf: zipfile.ZipFile):
         _last_status["component_count"] += sum(len(v) for v in comps_map.values())
         for lst in comps_map.values():
             for child_model, _, _ in lst:
+                if child_model.endswith(".model"):
+                    referenced_model_files.add(child_model)
                 if child_model != mf:
                     _last_status["external_p_path"] += 1
         cache[mf] = {'unit_scale_mm': unit_scale,'meshes_mm': meshes_mm,'comps': comps_map,'base_vol_mm3': base_vol_mm3,'root': root}
+    available_model_files = set(cache.keys())
+    missing = referenced_model_files - available_model_files
+    if missing:
+        examples = ", ".join(sorted(missing)[:3])
+        raise ValueError(
+            "3MF contains external components (production p:path) referencing missing model files: "
+            f"{examples}. This calculator requires all referenced .model parts to be present inside the 3MF."
+        )
     return cache
 
 
