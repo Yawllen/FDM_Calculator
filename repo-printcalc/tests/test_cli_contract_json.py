@@ -79,11 +79,7 @@ def test_cli_json_single_file_contract() -> None:
         if per_object:
             first = per_object[0]
             assert isinstance(first, dict), "Per-object item should be an object"
-            identity_fields = {"name", "file", "path", "meta"}
-            assert identity_fields.intersection(first.keys()), (
-                "Per-object item should include at least one identity field: "
-                f"{sorted(identity_fields)}"
-            )
+            assert "file" in first, "Per-object item should include 'file'"
             for key, value in first.items():
                 key_lower = key.lower()
                 if "volume" in key_lower:
@@ -92,6 +88,8 @@ def test_cli_json_single_file_contract() -> None:
                     _assert_finite_non_negative(value, f"{key} (weight)")
                 if "total_rub" in key_lower or "cost" in key_lower:
                     _assert_finite_non_negative(value, f"{key} (price)")
+    else:
+        assert summary is not None, "'summary' should be present when per_object is None"
 
 
 
@@ -115,7 +113,8 @@ def test_cli_json_batch_partial_failure_emits_json(tmp_path: Path) -> None:
         "0",
     ]
 
-    _, payload, _ = run_cli_json(args, cwd=repo_root())
+    returncode, payload, _ = run_cli_json(args, cwd=repo_root())
+    assert returncode != 0, "Expected non-zero return code for partial failure"
 
     assert "per_object" in payload, "JSON payload missing 'per_object'"
     assert "summary" in payload, "JSON payload missing 'summary'"
