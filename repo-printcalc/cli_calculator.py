@@ -90,7 +90,8 @@ CLI-версия 3D калькулятора печати (FDM)
   • Перед обработкой каждого файла выполняется полный сброс состояния парсера.
 
 Конфиги (materials.json / pricing.json):
-  • ВСЕГДА грузятся из папки, где лежит сам скрипт (строгий режим).
+  • По умолчанию берутся из cwd (если есть оба файла), иначе рядом со скриптом.
+  • Можно указать --config-dir для явной папки.
   • Переопределять отдельные параметры можно флагом --set key=val.
 
     Пример вызова из Python (FastAPI):
@@ -124,8 +125,6 @@ from typing import Dict, List, Tuple
 import core_calc as core
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STRICT_MATERIALS_PATH = os.path.join(BASE_DIR, "materials.json")
-STRICT_PRICING_PATH   = os.path.join(BASE_DIR, "pricing.json")
 
 # ---------- Утилиты ----------
 def set_by_dotted_path(d: dict, path: str, value):
@@ -160,44 +159,62 @@ def parse_kv_override(pairs):
     return out
 
 # ---------- Загрузка конфигов ----------
-def load_materials(path: str):
-    """Читает materials.json строго из указанного пути. Возвращает (density_by_material, price_per_gram_by_material)."""
-    if not os.path.exists(path):
-        raise SystemExit(f"[cli] materials.json не найден: {path}")
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        raise SystemExit(f"[cli] materials.json: ошибка чтения/JSON — {e}")
-    if not isinstance(data, dict) or not data:
-        raise SystemExit("[cli] materials.json: ожидается объект {material: {...}}")
-    density, price_g = {}, {}
-    for name, row in data.items():
-        if not isinstance(row, dict):
-            raise SystemExit(f"[cli] materials.json: неверный формат у материала '{name}'")
-        try:
-            d = float(row['density_g_cm3'])
-            pg = float(row['price_rub_per_g'])
-        except Exception:
-            raise SystemExit(f"[cli] materials.json: у материала '{name}' нет density_g_cm3/price_rub_per_g или неверный тип")
-        density[name] = d
-        price_g[name] = pg
-    return density, price_g
+class ConfigError(Exception):
+    """Ошибка конфигурации CLI (нет файла, неверный JSON, валидация и т.д.)."""
 
-def load_pricing(path: str, override: dict | None = None) -> dict:
-    """Читает pricing.json строго из указанного пути. Применяет override (--set)."""
-    if not os.path.exists(path):
-        raise SystemExit(f"[cli] pricing.json не найден: {path}")
+
+def resolve_config_paths(config_dir: str | None = None) -> tuple[str, str]:
+    """Определяет пути к materials.json и pricing.json по config_dir/cwd/директории скрипта."""
+    if config_dir:
+        base_dir = os.path.abspath(os.path.expanduser(config_dir))
+    else:
+        cwd = os.getcwd()
+        cwd_materials = os.path.join(cwd, "materials.json")
+        cwd_pricing = os.path.join(cwd, "pricing.json")
+        if os.path.exists(cwd_materials) and os.path.exists(cwd_pricing):
+            base_dir = cwd
+        else:
+            base_dir = BASE_DIR
+    return (
+        os.path.join(base_dir, "materials.json"),
+        os.path.join(base_dir, "pricing.json"),
+    )
+
+
+def load_configs_via_core(config_dir: str | None, override: dict | None = None) -> tuple[dict, dict, dict, str, str]:
+    """Загружает materials/pricing через core_calc как единую точку правды."""
+    materials_path, pricing_path = resolve_config_paths(config_dir)
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            cfg = json.load(f)
-    except Exception as e:
-        raise SystemExit(f"[cli] pricing.json: ошибка чтения/JSON — {e}")
-    if not isinstance(cfg, dict) or not cfg:
-        raise SystemExit("[cli] pricing.json: ожидается объект конфигурации")
-    if override:
-        core.deep_merge(cfg, override)
-    return cfg
+        density, price_g = core.load_materials_json(materials_path)
+    except FileNotFoundError as e:
+        raise ConfigError(f"Файл конфигурации не найден: {e.filename}") from None
+    except json.JSONDecodeError as e:
+        raise ConfigError(
+            f"materials.json: ошибка JSON ({e.msg}, строка {e.lineno}, колонка {e.colno})"
+        ) from None
+    except ValueError as e:
+        raise ConfigError(str(e)) from None
+
+    try:
+        pricing = core.load_pricing_json(pricing_path, override=override)
+    except FileNotFoundError as e:
+        raise ConfigError(f"Файл конфигурации не найден: {e.filename}") from None
+    except json.JSONDecodeError as e:
+        raise ConfigError(
+            f"pricing.json: ошибка JSON ({e.msg}, строка {e.lineno}, колонка {e.colno})"
+        ) from None
+    except ValueError as e:
+        raise ConfigError(str(e)) from None
+    return density, price_g, pricing, materials_path, pricing_path
+
+
+def finalize_json_payload(payload: dict, errors: List[dict], count_ok: int) -> dict:
+    """Добавляет поля ошибок и итоговые счетчики для JSON-вывода."""
+    payload["errors"] = list(errors)
+    payload["count_failed"] = len(errors)
+    payload["count_ok"] = int(count_ok)
+    payload["success"] = len(errors) == 0
+    return payload
 
 # ---------- Формулы времени и денег (идентичны GUI) ----------
 def _compute_one_file(
@@ -349,6 +366,7 @@ def compute_for_files(
     per_object: bool,
     as_json: bool,
     workers: int = 1,
+    errors: List[dict] | None = None,
 ) -> dict:
     """
     Высокоуровневая функция: считает набор файлов с опциональной параллелью.
@@ -364,6 +382,7 @@ def compute_for_files(
     qty = int(core.coerce_qty(qty))
 
     results: List[dict] = []
+    errors = errors if errors is not None else []
     grand = {"V_model_cm3": 0.0, "V_print_cm3": 0.0, "weight_g": 0.0, "material_cost": 0.0}
 
     file_list = list(files)
@@ -371,7 +390,7 @@ def compute_for_files(
     # Параллель: по файлам, только если файлов>1 и workers>1
     if workers and workers > 1 and len(file_list) > 1:
         with ProcessPoolExecutor(max_workers=int(workers)) as ex:
-            futs = [
+            futs = {
                 ex.submit(
                     _compute_one_file,
                     p,
@@ -385,32 +404,39 @@ def compute_for_files(
                     qty=qty,
                     brief=brief,
                     diag=diag,
-                )
+                ): p
                 for p in file_list
-            ]
+            }
             for fut in as_completed(futs):
-                results.append(fut.result())
+                path = futs[fut]
+                try:
+                    results.append(fut.result())
+                except Exception as exc:
+                    errors.append({"file": os.path.basename(path), "error": str(exc)})
 
         # стабильный порядок для вывода/тестов
         results.sort(key=lambda r: r["file"])
     else:
         # Последовательная обработка тем же кодом, что и в воркере (один источник правды)
         for p in file_list:
-            results.append(
-                _compute_one_file(
-                    p,
-                    materials_density=materials_density,
-                    price_per_gram=price_per_gram,
-                    pricing=pricing,
-                    material_name=material_name,
-                    infill=infill,
-                    setup_min=setup_min,
-                    post_min=post_min,
-                    qty=qty,
-                    brief=brief,
-                    diag=diag,
+            try:
+                results.append(
+                    _compute_one_file(
+                        p,
+                        materials_density=materials_density,
+                        price_per_gram=price_per_gram,
+                        pricing=pricing,
+                        material_name=material_name,
+                        infill=infill,
+                        setup_min=setup_min,
+                        post_min=post_min,
+                        qty=qty,
+                        brief=brief,
+                        diag=diag,
+                    )
                 )
-            )
+            except Exception as exc:
+                errors.append({"file": os.path.basename(p), "error": str(exc)})
 
     # Аггрегация общих метрик (без повторного применения setup/post/min-order)
     for r in results:
@@ -446,7 +472,7 @@ def compute_for_files(
                 "total_raw_rub": bd["total_with_min"],
                 "min_applied": bd["min_applied"],
             }
-        return payload
+        return finalize_json_payload(payload, errors, len(results))
 
     # ---------- TEXT ----------
     lines: List[str] = []
@@ -537,9 +563,10 @@ def main():
 
     ap = argparse.ArgumentParser(description="CLI 3D калькулятор печати (FDM) — .3mf/.stl, без UI, идентичен GUI-логике")
     ap.add_argument('files', nargs='+', help='Пути к моделям .3mf / .stl')
-    ap.add_argument('--materials', default='(ignored)', help='[ignored] materials.json всегда берётся из папки скрипта')
-    ap.add_argument('--pricing',   default='(ignored)',      help='[ignored] pricing.json всегда берётся из папки скрипта')
+    ap.add_argument('--materials', default='(ignored)', help='[ignored] используйте --config-dir')
+    ap.add_argument('--pricing',   default='(ignored)',      help='[ignored] используйте --config-dir')
     ap.add_argument('--set', dest='overrides', action='append', help='Переопределить параметры pricing (format: key=val, напр. printing.a1=1.02). Можно несколько раз.')
+    ap.add_argument('--config-dir', default=None, help='Папка с materials.json и pricing.json (по умолчанию: cwd или рядом со скриптом)')
 
     ap.add_argument('--material', required=False, help='Название материала из materials.json')
     ap.add_argument('--infill', type=float, default=10.0, help='% заполнения (0-100)')
@@ -561,7 +588,8 @@ def main():
     try:
         args.qty = core.coerce_qty(args.qty)
     except Exception as e:
-        raise SystemExit(f"Неверное значение --qty: {e}")
+        print(f"Неверное значение --qty: {e}", file=sys.stderr)
+        sys.exit(2)
 
     # Нормализуем числовые параметры (CLI может дать отрицательные значения)
     args.infill = float(max(0.0, min(100.0, args.infill)))
@@ -569,10 +597,20 @@ def main():
     args.post_min = float(max(0.0, args.post_min))
 
     # загрузка конфигов
-    print(f"[cli] using materials: {STRICT_MATERIALS_PATH}", file=sys.stderr)
-    print(f"[cli] using pricing  : {STRICT_PRICING_PATH}",   file=sys.stderr)
-    dens, priceg = load_materials(STRICT_MATERIALS_PATH)
-    pricing = load_pricing(STRICT_PRICING_PATH, override=parse_kv_override(args.overrides))
+    try:
+        overrides = parse_kv_override(args.overrides)
+    except ValueError as e:
+        print(f"Неверный формат --set: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        dens, priceg, pricing, materials_path, pricing_path = load_configs_via_core(args.config_dir, overrides)
+    except ConfigError as e:
+        print(f"Ошибка конфигурации: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"[cli] using materials: {materials_path}", file=sys.stderr)
+    print(f"[cli] using pricing  : {pricing_path}", file=sys.stderr)
 
 
     # выбор материала
@@ -580,22 +618,37 @@ def main():
     if not material:
         material = sorted(dens.keys())[0]
     if material not in dens:
-        raise SystemExit(f"Материал '{material}' не найден в {STRICT_MATERIALS_PATH}")
+        print(f"Материал '{material}' не найден в {materials_path}", file=sys.stderr)
+        sys.exit(2)
 
-    payload = compute_for_files(
-        args.files,
-        materials_density=dens, price_per_gram=priceg, pricing=pricing,
-        material_name=material, infill=args.infill, setup_min=args.setup_min, post_min=args.post_min,
-        qty=int(args.qty),
-        brief=bool(args.brief), diag=bool(args.diag),
-        per_object=bool(args.per_object), as_json=bool(args.json), workers=int(max(1, args.workers))
-    )
+    errors: List[dict] = []
+    try:
+        payload = compute_for_files(
+            args.files,
+            materials_density=dens, price_per_gram=priceg, pricing=pricing,
+            material_name=material, infill=args.infill, setup_min=args.setup_min, post_min=args.post_min,
+            qty=int(args.qty),
+            brief=bool(args.brief), diag=bool(args.diag),
+            per_object=bool(args.per_object), as_json=bool(args.json),
+            workers=int(max(1, args.workers)),
+            errors=errors,
+        )
+    except Exception as e:
+        print(f"Ошибка расчёта: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if errors and not args.json:
+        for err in errors:
+            print(f"[cli] файл {err.get('file')}: {err.get('error')}", file=sys.stderr)
 
     # вывод
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(payload["text"])
+
+    if errors:
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
