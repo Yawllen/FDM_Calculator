@@ -14,6 +14,7 @@ core_calc.py — чистое ядро 3D калькулятора печати 
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 import struct
 import zipfile
 import json
@@ -295,6 +296,7 @@ MAX_3MF_OBJECTS = 20000
 MAX_3MF_COMPONENTS = 200000
 MAX_3MF_VERTICES = 20_000_000
 MAX_3MF_TRIANGLES = 40_000_000
+MAX_CACHE_ENTRIES = 64
 
 
 def _unit_to_mm(unit_str: str) -> float:
@@ -341,8 +343,16 @@ def _detect_and_set_namespace(root: ET.Element) -> None:
         pass
 
 
+def _limit_err(kind: str, current: int, limit: int, context: str = "") -> ValueError:
+    msg = f"3MF limit exceeded: {kind}={current} > {limit}"
+    if context:
+        msg += f" ({context})"
+    return ValueError(msg)
+
+
 # --- состояние парсера (для диагностики) ---
 _last_status = {"file": "","unit_set": set(),"item_count": 0,"component_count": 0,"external_p_path": 0,"det_values": []}
+_geometry_cache: "OrderedDict[tuple, list]" = OrderedDict()
 
 
 def _reset_parser_state():
@@ -356,6 +366,37 @@ def _reset_parser_state():
         "external_p_path": 0,
         "det_values": [],
     }
+
+
+def _geometry_cache_key(path: str) -> tuple:
+    full_path = os.path.normpath(os.path.abspath(path))
+    stat = os.stat(full_path)
+    return full_path, stat.st_mtime, stat.st_size
+
+
+def _copy_geometry_data(data: list) -> list:
+    copied = []
+    for name, V, T, vol_cm3, meta in data:
+        V_copy = V.copy() if isinstance(V, np.ndarray) else V
+        T_copy = T.copy() if isinstance(T, np.ndarray) else T
+        meta_copy = dict(meta) if isinstance(meta, dict) else meta
+        copied.append((name, V_copy, T_copy, vol_cm3, meta_copy))
+    return copied
+
+
+def _geometry_cache_get(key: tuple) -> list | None:
+    cached = _geometry_cache.get(key)
+    if cached is None:
+        return None
+    _geometry_cache.move_to_end(key)
+    return _copy_geometry_data(cached)
+
+
+def _geometry_cache_set(key: tuple, data: list) -> None:
+    _geometry_cache[key] = data
+    _geometry_cache.move_to_end(key)
+    while len(_geometry_cache) > MAX_CACHE_ENTRIES:
+        _geometry_cache.popitem(last=False)
 
 
 def status_block_text() -> str:
@@ -378,12 +419,14 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
 
     def _check_limit(kind: str, count: int, limit: int, label: str) -> None:
         if count > limit:
-            raise ValueError(f"3MF limit exceeded: {kind} {count} > {limit} ({label})")
+            raise _limit_err(kind, count, limit, label)
 
     for obj in root.findall('.//ns:object', NAMESPACE):
         limits_state["objects"] += 1
         _check_limit("objects", limits_state["objects"], MAX_3MF_OBJECTS, "MAX_3MF_OBJECTS")
         oid = obj.get('id')
+        if oid is None or oid == "":
+            raise ValueError("Malformed 3MF: <object> missing required id attribute")
         mesh = obj.find('ns:mesh', NAMESPACE)
         if mesh is not None:
             vs = mesh.find('ns:vertices', NAMESPACE)
@@ -440,14 +483,11 @@ def _build_model_cache(zf: zipfile.ZipFile):
     for mf in model_files:
         info = zf.getinfo(mf)
         if info.file_size > MAX_3MF_ENTRY_BYTES:
-            raise ValueError(
-                f"3MF too large: {mf} exceeds limit {MAX_3MF_ENTRY_BYTES} bytes (MAX_3MF_ENTRY_BYTES)"
-            )
+            raise _limit_err("entry_bytes", info.file_size, MAX_3MF_ENTRY_BYTES, "MAX_3MF_ENTRY_BYTES")
         total_xml_bytes += info.file_size
         if total_xml_bytes > MAX_3MF_TOTAL_XML_BYTES:
-            raise ValueError(
-                "3MF too large: total XML bytes "
-                f"{total_xml_bytes} exceeds limit {MAX_3MF_TOTAL_XML_BYTES} (MAX_3MF_TOTAL_XML_BYTES)"
+            raise _limit_err(
+                "total_xml_bytes", total_xml_bytes, MAX_3MF_TOTAL_XML_BYTES, "MAX_3MF_TOTAL_XML_BYTES"
             )
         root = ET.fromstring(zf.read(mf))
         _detect_and_set_namespace(root)
@@ -629,13 +669,22 @@ def parse_stl(path: str):
 
 
 def parse_geometry(path: str):
-    _reset_parser_state()
     ext = os.path.splitext(path)[1].lower()
+    if ext not in {'.3mf', '.stl'}:
+        raise ValueError('Only .3mf and .stl supported')
+    cache_key = _geometry_cache_key(path)
+    cached = _geometry_cache_get(cache_key)
+    if cached is not None:
+        _reset_parser_state()
+        _last_status["file"] = os.path.basename(path)
+        return cached
+    _reset_parser_state()
     if ext == '.3mf':
-        return parse_3mf(path)
-    if ext == '.stl':
-        return parse_stl(path)
-    raise ValueError('Only .3mf and .stl supported')
+        data = parse_3mf(path)
+    else:
+        data = parse_stl(path)
+    _geometry_cache_set(cache_key, _copy_geometry_data(data))
+    return data
 
 
 # ---------- Defaults (как раньше в UI) ----------
