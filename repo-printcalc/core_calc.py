@@ -541,6 +541,10 @@ def _read_and_validate_binary_stl(path: str) -> int:
     except struct.error as e:
         raise ValueError(f"Malformed binary STL: cannot read triangle count ({e})") from None
 
+    max_count = max(0, (file_size - 84) // 50)
+    if count > max_count:
+        raise ValueError("Malformed binary STL: triangle count exceeds file size")
+
     expected_size = 84 + 50 * count
     if expected_size == file_size:
         return count

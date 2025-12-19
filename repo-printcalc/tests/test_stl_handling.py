@@ -120,3 +120,19 @@ def test_parse_stl_rejects_truncated_binary(tmp_path: Path):
         assert "Malformed binary STL" in str(e)
     else:
         raise AssertionError("ValueError expected for malformed binary STL")
+
+
+def test_parse_stl_rejects_count_exceeding_file_size(tmp_path: Path):
+    invalid_path = tmp_path / "count_exceeds_size.stl"
+    header = b"invalid-count".ljust(80, b"\0")
+    data = bytearray()
+    data.extend(header)
+    data.extend(struct.pack("<I", 3))
+    invalid_path.write_bytes(data)
+
+    try:
+        parse_stl(str(invalid_path))
+    except ValueError as e:
+        assert "triangle count exceeds file size" in str(e)
+    else:
+        raise AssertionError("ValueError expected for malformed binary STL")
