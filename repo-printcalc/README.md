@@ -12,13 +12,13 @@ python -m pip install -r requirements-dev.txt
 ```
 
 ## CLI quickstart
-```bash
+```powershell
 python cli_calculator.py model.stl --material "PLA"
 ```
 
 ## Тесты (Windows PowerShell)
 ```powershell
-pytest -q
+python -m pytest -q
 ```
 
 ## Usage
