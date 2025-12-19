@@ -267,10 +267,18 @@ def _compute_one_file(
     # Определяем тип файла по распарсенным объектам
     is_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
-    for _, V, T, _vol_fast_cm3, srcinfo in objs:
+    for _, V, T, vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
         # Для 3MF используем быстрый объём с учётом transforms (как в UI).
-        V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=srcinfo or {}))
+        if (
+            volume_mode == "fast"
+            and (srcinfo or {}).get("type") == "3mf"
+            and vol_fast_cm3
+            and vol_fast_cm3 > 0
+        ):
+            V_model = float(vol_fast_cm3)
+        else:
+            V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=srcinfo or {}))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
         V_total = float(
