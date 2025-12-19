@@ -462,10 +462,14 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
                     ref = c.get('objectid')
                     M = _parse_transform(c.get('transform'))
                     p_path = c.get(f'{{{NS_PROD}}}path') or c.get('path')
-                    child_model = p_path.lstrip('/') if p_path else model_path
+                    child_model = _norm_model_path(p_path) if p_path else _norm_model_path(model_path)
                     comp_list.append((child_model, ref, M))
             comps_map[oid] = comp_list
     return meshes_mm, comps_map, base_vol_mm3
+
+
+def _norm_model_path(path: str) -> str:
+    return (path or "").replace("\\", "/").lstrip("/")
 
 
 def _build_model_cache(zf: zipfile.ZipFile):
@@ -498,12 +502,13 @@ def _build_model_cache(zf: zipfile.ZipFile):
         _last_status["component_count"] += sum(len(v) for v in comps_map.values())
         for lst in comps_map.values():
             for child_model, _, _ in lst:
-                if child_model.endswith(".model"):
-                    referenced_model_files.add(child_model)
-                if child_model != mf:
+                norm_child = _norm_model_path(child_model)
+                if norm_child.lower().endswith(".model"):
+                    referenced_model_files.add(norm_child)
+                if norm_child != _norm_model_path(mf):
                     _last_status["external_p_path"] += 1
         cache[mf] = {'unit_scale_mm': unit_scale,'meshes_mm': meshes_mm,'comps': comps_map,'base_vol_mm3': base_vol_mm3,'root': root}
-    available_model_files = set(cache.keys())
+    available_model_files = {_norm_model_path(key) for key in cache.keys()}
     missing = referenced_model_files - available_model_files
     if missing:
         examples = ", ".join(sorted(missing)[:3])
