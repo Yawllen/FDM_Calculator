@@ -614,6 +614,8 @@ def _read_and_validate_binary_stl(path: str) -> int:
 
     max_count = max(0, (file_size - 84) // 50)
     if count > max_count:
+        if ascii_like:
+            raise ValueError(_ASCII_STL_MESSAGE)
         raise ValueError("Malformed binary STL: triangle count exceeds file size")
 
     expected_size = 84 + 50 * count
