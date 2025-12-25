@@ -304,6 +304,9 @@ def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict
         return volume_bbox(V_mm)
     if mode_norm == "stream":
         meta = meta or {}
+        stream_volume_cm3 = meta.get("stream_volume_cm3")
+        if stream_volume_cm3 is not None:
+            return float(stream_volume_cm3)
         if meta.get("type") != "stl" or not meta.get("path"):
             raise ValueError("volume-mode=stream is supported only for binary STL")
         return stl_stream_volume_cm3(meta["path"])
