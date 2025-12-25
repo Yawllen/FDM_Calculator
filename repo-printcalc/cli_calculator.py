@@ -252,6 +252,13 @@ def _compute_one_file(
     objs = core.parse_geometry(path)
 
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
+    is_stream = volume_mode == "stream"
+    stream_volume_cm3 = None
+    if is_stream:
+        ext = os.path.splitext(path)[1].lower()
+        if ext != ".stl":
+            raise ValueError("volume-mode=stream is supported only for binary STL")
+        stream_volume_cm3 = core.stl_stream_volume_cm3(path)
 
     total_V_model_cm3 = 0.0
     total_V_print_cm3 = 0.0
@@ -267,15 +274,18 @@ def _compute_one_file(
     for _, V, T, vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
         # Для 3MF в fast-режиме используем предрасчитанный объём с учётом transforms.
-        meta_for_volume = dict(srcinfo or {})
-        if (
-            volume_mode == "fast"
-            and meta_for_volume.get("type") == "3mf"
-            and vol_fast_cm3
-            and vol_fast_cm3 > 0
-        ):
-            meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
-        V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
+        if is_stream:
+            V_model = float(stream_volume_cm3 or 0.0)
+        else:
+            meta_for_volume = dict(srcinfo or {})
+            if (
+                volume_mode == "fast"
+                and meta_for_volume.get("type") == "3mf"
+                and vol_fast_cm3
+                and vol_fast_cm3 > 0
+            ):
+                meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
+            V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
         V_total = float(

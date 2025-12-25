@@ -307,7 +307,7 @@ def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict
         if meta.get("type") != "stl" or not meta.get("path"):
             raise ValueError("volume-mode=stream is supported only for binary STL")
         return stl_stream_volume_cm3(meta["path"])
-    raise ValueError(f"Unknown volume-mode: {mode}")
+    raise ValueError(f"Unknown volume-mode: {mode_norm!r}")
 
 
 # ---------- 3MF / STL ----------
