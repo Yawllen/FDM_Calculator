@@ -228,6 +228,7 @@ def _compute_one_file(
     setup_min: float,
     post_min: float,
     qty: int,
+    volume_mode: str,
     brief: bool,
     diag: bool,
 ) -> dict:
@@ -251,6 +252,12 @@ def _compute_one_file(
     objs = core.parse_geometry(path)
 
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
+    stream_volume_cm3 = None
+    if volume_mode == "stream":
+        if os.path.splitext(path)[1].lower() != ".stl":
+            raise ValueError("volume-mode=stream is supported only for binary STL")
+        stream_volume_cm3 = core.stl_stream_volume_cm3(path)
+    has_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     total_V_model_cm3 = 0.0
     total_V_print_cm3 = 0.0
@@ -263,16 +270,20 @@ def _compute_one_file(
     layer_height_geo = 0.2
     top_bottom_layers = 4
 
-    # Определяем тип файла по распарсенным объектам
-    is_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
-
     for _, V, T, vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
-        # Для 3MF используем быстрый объём с учётом transforms (как в UI).
-        if (srcinfo or {}).get("type") == "3mf" and vol_fast_cm3 and vol_fast_cm3 > 0:
-            V_model = float(vol_fast_cm3)
-        else:
-            V_model = float(core.volume_tetra(V, T))
+        # Для 3MF в fast-режиме используем предрасчитанный объём с учётом transforms.
+        meta_for_volume = dict(srcinfo or {})
+        if (
+            volume_mode == "fast"
+            and meta_for_volume.get("type") == "3mf"
+            and vol_fast_cm3
+            and vol_fast_cm3 > 0
+        ):
+            meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
+        if volume_mode == "stream" and stream_volume_cm3 is not None:
+            meta_for_volume["precomputed_volume_cm3"] = float(stream_volume_cm3)
+        V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
         V_total = float(
@@ -316,7 +327,7 @@ def _compute_one_file(
 
     # diag только для 3MF (иначе у STL будет мусорный пустой блок "Файл:")
     diag_text = ""
-    if diag and is_3mf:
+    if diag and has_3mf:
         diag_text = core.status_block_text()
 
     return {
@@ -366,6 +377,7 @@ def compute_for_files(
     per_object: bool,
     as_json: bool,
     workers: int = 1,
+    volume_mode: str = "fast",
     errors: List[dict] | None = None,
 ) -> dict:
     """
@@ -402,6 +414,7 @@ def compute_for_files(
                     setup_min=setup_min,
                     post_min=post_min,
                     qty=qty,
+                    volume_mode=volume_mode,
                     brief=brief,
                     diag=diag,
                 ): p
@@ -431,6 +444,7 @@ def compute_for_files(
                         setup_min=setup_min,
                         post_min=post_min,
                         qty=qty,
+                        volume_mode=volume_mode,
                         brief=brief,
                         diag=diag,
                     )
@@ -573,6 +587,12 @@ def main():
     ap.add_argument('--setup-min', type=float, default=10.0, help='Подготовка (мин)')
     ap.add_argument('--post-min',  type=float, default=0.0,  help='Постпроцесс (мин)')
     ap.add_argument('--qty', type=int, default=1, help='Количество одинаковых комплектов моделей (тираж). Цена считается за заказ.')
+    ap.add_argument(
+        '--volume-mode',
+        choices=['fast', 'stream', 'bbox'],
+        default='fast',
+        help='Режим расчёта объёма: fast (tetra), stream (только бинарный STL), bbox (по габаритам).',
+    )
 
     fmt = ap.add_mutually_exclusive_group()
     fmt.add_argument('--json', action='store_true', help='Вывод в JSON')
@@ -631,6 +651,7 @@ def main():
             brief=bool(args.brief), diag=bool(args.diag),
             per_object=bool(args.per_object), as_json=bool(args.json),
             workers=int(max(1, args.workers)),
+            volume_mode=str(args.volume_mode),
             errors=errors,
         )
     except Exception as e:
