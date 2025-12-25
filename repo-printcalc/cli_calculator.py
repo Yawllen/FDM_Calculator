@@ -252,13 +252,6 @@ def _compute_one_file(
     objs = core.parse_geometry(path)
 
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
-    is_stream = volume_mode == "stream"
-    stream_volume_cm3 = None
-    if is_stream:
-        ext = os.path.splitext(path)[1].lower()
-        if ext != ".stl":
-            raise ValueError("volume-mode=stream is supported only for binary STL")
-        stream_volume_cm3 = core.stl_stream_volume_cm3(path)
     any_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     total_V_model_cm3 = 0.0
@@ -283,8 +276,6 @@ def _compute_one_file(
             and vol_fast_cm3 > 0
         ):
             meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
-        if is_stream and stream_volume_cm3 is not None:
-            meta_for_volume["stream_volume_cm3"] = float(stream_volume_cm3)
         V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
