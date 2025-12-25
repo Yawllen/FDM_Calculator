@@ -272,8 +272,7 @@ def _compute_one_file(
         # Для 3MF в fast-режиме используем предрасчитанный объём с учётом transforms.
         meta_for_volume = dict(srcinfo or {})
         if (
-            volume_mode == "fast"
-            and meta_for_volume.get("type") == "3mf"
+            meta_for_volume.get("type") == "3mf"
             and vol_fast_cm3
             and vol_fast_cm3 > 0
         ):
