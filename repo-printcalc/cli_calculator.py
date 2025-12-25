@@ -252,6 +252,8 @@ def _compute_one_file(
     objs = core.parse_geometry(path)
 
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
+    if volume_mode == "stream" and os.path.splitext(path)[1].lower() != ".stl":
+        raise ValueError("volume-mode=stream is supported only for binary STL")
     any_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     total_V_model_cm3 = 0.0
