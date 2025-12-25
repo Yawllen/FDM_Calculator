@@ -254,7 +254,7 @@ def _compute_one_file(
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
     if volume_mode == "stream" and os.path.splitext(path)[1].lower() != ".stl":
         raise ValueError("volume-mode=stream is supported only for binary STL")
-    any_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
+    has_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     total_V_model_cm3 = 0.0
     total_V_print_cm3 = 0.0
@@ -321,7 +321,7 @@ def _compute_one_file(
 
     # diag только для 3MF (иначе у STL будет мусорный пустой блок "Файл:")
     diag_text = ""
-    if diag and any_3mf:
+    if diag and has_3mf:
         diag_text = core.status_block_text()
 
     return {
