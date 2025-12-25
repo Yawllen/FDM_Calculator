@@ -60,3 +60,19 @@ def test_compute_volume_cm3_fast_prefers_precomputed():
     )
 
     assert volume == precomputed
+
+
+def test_compute_volume_cm3_stream_prefers_precomputed(monkeypatch):
+    def _boom(path: str) -> float:
+        raise AssertionError("stl_stream_volume_cm3 should not be called")
+
+    monkeypatch.setattr("core_calc.stl_stream_volume_cm3", _boom)
+
+    volume = compute_volume_cm3(
+        V_mm=np.empty((0, 3), dtype=np.float64),
+        T=np.empty((0, 3), dtype=np.int32),
+        mode="stream",
+        meta={"precomputed_volume_cm3": 2.5},
+    )
+
+    assert volume == 2.5
