@@ -247,22 +247,22 @@ def _compute_one_file(
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    # СБРОС ПЕРЕД МОДЕЛЬЮ
+        # СБРОС ПЕРЕД МОДЕЛЬЮ
+    # Guard: stream-режим разрешён только для STL (без парсинга 3MF/прочих файлов)
+    if volume_mode == "stream" and os.path.splitext(path)[1].lower() != ".stl":
+        raise ValueError("volume-mode=stream is supported only for STL files (binary STL will be validated from file)")
+
     core._reset_parser_state()
     objs = core.parse_geometry(path)
 
     vol_factor = float((pricing.get("geometry", {}) or {}).get("volume_factor", 1.0))
-    stream_volume_cm3 = None
-    if volume_mode == "stream":
-        if os.path.splitext(path)[1].lower() != ".stl":
-            raise ValueError("volume-mode=stream is supported only for binary STL")
-        stream_volume_cm3 = core.stl_stream_volume_cm3(path)
     has_3mf = any(((srcinfo or {}).get("type") == "3mf") for _, _, _, _, srcinfo in objs)
 
     total_V_model_cm3 = 0.0
     total_V_print_cm3 = 0.0
     total_weight_g = 0.0
     total_mat_cost = 0.0
+
 
     # Параметры печати — намеренно захардкожены (как в UI)
     wall_count = 2
@@ -281,8 +281,6 @@ def _compute_one_file(
             and vol_fast_cm3 > 0
         ):
             meta_for_volume["precomputed_volume_cm3"] = float(vol_fast_cm3)
-        if volume_mode == "stream" and stream_volume_cm3 is not None:
-            meta_for_volume["precomputed_volume_cm3"] = float(stream_volume_cm3)
         V_model = float(core.compute_volume_cm3(V, T, mode=volume_mode, meta=meta_for_volume))
 
         # 2) Объём печати (см³): стенки/крышки/заполнение (как в UI)
@@ -511,7 +509,7 @@ def compute_for_files(
                 total_rub=r["total_rub"],
                 total_rounded_rub=r["total_rounded_rub"],
                 rounding_step_rub=r["rounding_step_rub"],
-                calc_time_s=calc_time_s,
+                calc_time_s=float(r.get("calc_seconds", calc_time_s)),
                 qty=int(qty),
                 brief=brief,
                 show_diag=diag,

@@ -308,7 +308,7 @@ def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict
         if precomputed is not None and precomputed > 0:
             return float(precomputed)
         if meta.get("type") != "stl" or not meta.get("path"):
-            raise ValueError("volume-mode=stream is supported only for binary STL")
+            raise ValueError("volume-mode=stream requires meta: {'type': 'stl', 'path': <file>} (binary STL will be validated from file)")
         return stl_stream_volume_cm3(meta["path"])
     raise ValueError(f"Unknown volume-mode: {mode_norm!r}")
 
