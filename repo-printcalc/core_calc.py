@@ -332,6 +332,14 @@ def _unit_to_mm(unit_str: str) -> float:
     }.get(unit, 1.0)
 
 
+def _det3(a00, a01, a02, a10, a11, a12, a20, a21, a22) -> float:
+    return (
+        a00 * (a11 * a22 - a12 * a21)
+        - a01 * (a10 * a22 - a12 * a20)
+        + a02 * (a10 * a21 - a11 * a20)
+    )
+
+
 def _parse_transform(s: str | None) -> np.ndarray:
     """
     Контракт математики для 3MF-transform:
@@ -341,16 +349,35 @@ def _parse_transform(s: str | None) -> np.ndarray:
     """
     if not s:
         return np.eye(4, dtype=np.float64)
-    vals = [float(x) for x in s.replace(',', ' ').split()]
+    try:
+        vals = [float(x) for x in s.replace(",", " ").split()]
+    except Exception:
+        return np.eye(4, dtype=np.float64)
     if len(vals) != 12:
         return np.eye(4, dtype=np.float64)
-    m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23 = vals
-    return np.array([
-        [m00, m01, m02, m03],
-        [m10, m11, m12, m13],
-        [m20, m21, m22, m23],
-        [0.0, 0.0, 0.0, 1.0],
-    ], dtype=np.float64)
+    a00, a01, a02, a03, a10, a11, a12, a13, a20, a21, a22, a23 = vals
+    det_a = _det3(a00, a01, a02, a10, a11, a12, a20, a21, a22)
+    b00, b01, b02, b10, b11, b12, b20, b21, b22, b03, b13, b23 = vals
+    det_b = _det3(b00, b01, b02, b10, b11, b12, b20, b21, b22)
+    eps = 1e-12
+    use_b = (abs(det_a) <= eps) and (abs(det_b) > eps) and (abs(det_b) > abs(det_a))
+    if use_b:
+        m00, m01, m02, m03 = b00, b01, b02, b03
+        m10, m11, m12, m13 = b10, b11, b12, b13
+        m20, m21, m22, m23 = b20, b21, b22, b23
+    else:
+        m00, m01, m02, m03 = a00, a01, a02, a03
+        m10, m11, m12, m13 = a10, a11, a12, a13
+        m20, m21, m22, m23 = a20, a21, a22, a23
+    return np.array(
+        [
+            [m00, m01, m02, m03],
+            [m10, m11, m12, m13],
+            [m20, m21, m22, m23],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
 
 
 def _apply_transform(V_mm: np.ndarray, M: np.ndarray) -> np.ndarray:
