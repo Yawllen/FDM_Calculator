@@ -249,7 +249,7 @@ def _compute_one_file(
 
         # СБРОС ПЕРЕД МОДЕЛЬЮ
     # Guard: stream-режим разрешён только для STL (без парсинга 3MF/прочих файлов)
-    if volume_mode == "stream" and os.path.splitext(path)[1].lower() != ".stl":
+    if volume_mode == "stream" and not core.is_stream_supported(path):
         raise ValueError("volume-mode=stream is supported only for STL files (binary STL will be validated from file)")
 
     core._reset_parser_state()
