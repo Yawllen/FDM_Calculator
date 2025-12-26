@@ -47,3 +47,22 @@ def test_parse_stl_adds_precomputed_stream_volume(tmp_path: Path):
     assert len(models) == 1
     _, _, _, _, meta = models[0]
     assert "precomputed_stream_volume_cm3" in meta
+
+
+def test_stream_volume_matches_precomputed_from_parse(tmp_path: Path):
+    tri = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    tri2 = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    tri3 = ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+    tri4 = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
+    path = tmp_path / "tetra_match.stl"
+    _write_binary_stl(path, [tri, tri2, tri3, tri4])
+
+    models = core_calc.parse_stl(str(path))
+    _, _, _, _, meta = models[0]
+    stream_volume = core_calc.compute_volume_cm3(
+        V_mm=np.empty((0, 3), dtype=np.float64),
+        T=np.empty((0, 3), dtype=np.int32),
+        mode="stream",
+        meta=meta,
+    )
+    assert stream_volume == core_calc.stl_stream_volume_cm3(str(path))

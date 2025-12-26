@@ -686,9 +686,9 @@ def parse_3mf(path: str):
         selected = item_models if item_models else model_files
         for mf in selected:
             items = items_per_model.get(mf, [])
+            model_ids = set(cache[mf]['meshes_mm'].keys()) | set(cache[mf]['comps'].keys())
             if not items:
-                all_ids = set(cache[mf]['meshes_mm'].keys()) | set(cache[mf]['comps'].keys())
-                for oid in all_ids:
+                for oid in model_ids:
                     V_mm, T, vol_mm3_fast = _flatten_object_cached(cache, mf, oid, np.eye(4))
                     if V_mm.size == 0 and vol_mm3_fast == 0.0:
                         continue
@@ -700,7 +700,6 @@ def parse_3mf(path: str):
                 oid = item.get('objectid')
                 if oid is None or oid == "":
                     raise ValueError("Malformed 3MF: build item missing required objectid")
-                model_ids = set(cache[mf]['meshes_mm'].keys()) | set(cache[mf]['comps'].keys())
                 if oid not in model_ids:
                     model_name = os.path.basename(mf) or mf
                     raise ValueError(
