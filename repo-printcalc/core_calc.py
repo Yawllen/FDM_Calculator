@@ -763,11 +763,18 @@ def stl_stream_volume_cm3(path: str) -> float:
         with open(path, 'rb') as f:
             f.seek(84)
             total6 = 0.0
-            for _ in range(count):
+            for tri_idx in range(count):
                 f.read(12)
                 v0 = struct.unpack('<fff', f.read(12))
                 v1 = struct.unpack('<fff', f.read(12))
                 v2 = struct.unpack('<fff', f.read(12))
+                # Hot-path: avoid numpy ufunc overhead on scalars
+                if not (
+                    math.isfinite(v0[0]) and math.isfinite(v0[1]) and math.isfinite(v0[2]) and
+                    math.isfinite(v1[0]) and math.isfinite(v1[1]) and math.isfinite(v1[2]) and
+                    math.isfinite(v2[0]) and math.isfinite(v2[1]) and math.isfinite(v2[2])
+                ):
+                    raise ValueError(f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx}")
                 cx = (v1[1]*v2[2] - v1[2]*v2[1])
                 cy = (v1[2]*v2[0] - v1[0]*v2[2])
                 cz = (v1[0]*v2[1] - v1[1]*v2[0])
@@ -785,10 +792,14 @@ def parse_stl(path: str):
     try:
         with open(path, 'rb') as f:
             f.seek(84)
-            for _ in range(count):
+            for tri_idx in range(count):
                 f.read(12); face = []
-                for _ in range(3):
+                for vi in range(3):
                     xyz = struct.unpack('<fff', f.read(12))
+                    if not (math.isfinite(xyz[0]) and math.isfinite(xyz[1]) and math.isfinite(xyz[2])):
+                        raise ValueError(
+                            f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx} vertex {vi}"
+                        )
                     if xyz not in idx_map:
                         idx_map[xyz] = len(verts); verts.append(xyz)
                     face.append(idx_map[xyz])
