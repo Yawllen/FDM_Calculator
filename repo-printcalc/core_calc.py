@@ -809,6 +809,17 @@ def parse_stl(path: str):
     count = _read_and_validate_binary_stl(path)
     verts, tris, idx_map = [], [], {}
     total6 = 0.0
+    def _vertex_index(xyz, vi: int) -> int:
+        if not (math.isfinite(xyz[0]) and math.isfinite(xyz[1]) and math.isfinite(xyz[2])):
+            raise ValueError(
+                f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx} vertex {vi}"
+            )
+        idx = idx_map.get(xyz)
+        if idx is None:
+            idx = len(verts)
+            idx_map[xyz] = idx
+            verts.append(xyz)
+        return idx
     try:
         with open(path, 'rb') as f:
             f.seek(84)
@@ -817,16 +828,12 @@ def parse_stl(path: str):
                 v0 = struct.unpack('<fff', f.read(12))
                 v1 = struct.unpack('<fff', f.read(12))
                 v2 = struct.unpack('<fff', f.read(12))
-                face = []
-                for vi, xyz in enumerate((v0, v1, v2)):
-                    if not (math.isfinite(xyz[0]) and math.isfinite(xyz[1]) and math.isfinite(xyz[2])):
-                        raise ValueError(
-                            f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx} vertex {vi}"
-                        )
-                    if xyz not in idx_map:
-                        idx_map[xyz] = len(verts); verts.append(xyz)
-                    face.append(idx_map[xyz])
-                tris.append(tuple(face))
+                face = (
+                    _vertex_index(v0, 0),
+                    _vertex_index(v1, 1),
+                    _vertex_index(v2, 2),
+                )
+                tris.append(face)
                 cx = (v1[1]*v2[2] - v1[2]*v2[1])
                 cy = (v1[2]*v2[0] - v1[0]*v2[2])
                 cz = (v1[0]*v2[1] - v1[1]*v2[0])
