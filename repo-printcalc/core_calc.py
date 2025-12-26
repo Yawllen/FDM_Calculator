@@ -565,6 +565,11 @@ def _build_model_cache(zf: zipfile.ZipFile):
         _detect_and_set_namespace(root)
         unit_scale = _unit_to_mm(root.get('unit'))
         _last_status["unit_set"].add(root.get('unit') or 'millimeter')
+        has_prod_ext = any(
+            (NS_PROD in key)
+            for elem in root.iter()
+            for key in elem.attrib.keys()
+        )
         meshes_mm, comps_map, base_vol_mm3, has_prod_path = _gather_model_mm(
             root, unit_scale, mf, limits_state
         )
@@ -583,6 +588,7 @@ def _build_model_cache(zf: zipfile.ZipFile):
             'base_vol_mm3': base_vol_mm3,
             'root': root,
             'has_prod_path': has_prod_path,
+            'has_prod_ext': has_prod_ext,
         }
     available_model_files = {_norm_model_path(key) for key in cache.keys()}
     missing = referenced_model_files - available_model_files
@@ -663,7 +669,7 @@ def parse_3mf(path: str):
             for idx, item in enumerate(items, 1):
                 oid = item.get('objectid')
                 Mitem = _parse_transform(
-                    item.get('transform'), allow_alt_order=bool(cache[mf].get('has_prod_path'))
+                    item.get('transform'), allow_alt_order=bool(cache[mf].get('has_prod_ext'))
                 )
                 _last_status["det_values"].append(float(np.linalg.det(Mitem[:3, :3])))
                 V_mm, T, vol_mm3_fast = _flatten_object_cached(cache, mf, oid, Mitem)
