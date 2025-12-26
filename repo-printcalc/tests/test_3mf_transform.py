@@ -68,6 +68,24 @@ def test_transform_translation(tmp_path: Path):
     assert np.array_equal(T, TRIANGLES)
 
 
+def test_transform_singular_no_alt_order(tmp_path: Path):
+    xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<model unit=\"millimeter\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n"
+        "  <resources>\n"
+        f"{_mesh_xml('1')}"
+        "  </resources>\n"
+        "  <build>\n"
+        "    <item objectid=\"1\" transform=\"1 0 0 10 0 1 0 20 0 0 0 30\" />\n"
+        "  </build>\n"
+        "</model>\n"
+    )
+    path = _write_model(tmp_path, xml)
+
+    _, V_mm, _, _, _ = parse_3mf(str(path))[0]
+    assert np.allclose(V_mm[0], np.array([11.0, 22.0, 30.0]))
+
+
 def test_transform_scale_volume(tmp_path: Path):
     xml = (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
