@@ -474,8 +474,6 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
     meshes_mm: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     comps_map: Dict[str, List[Tuple[str, str, np.ndarray]]] = {}
     base_vol_mm3: Dict[str, float] = {}
-    has_prod_path = False
-
     def _check_limit(kind: str, count: int, limit: int, label: str) -> None:
         if count > limit:
             raise _limit_err(kind, count, limit, label)
@@ -520,13 +518,11 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
                     _check_limit("components", limits_state["components"], MAX_3MF_COMPONENTS, "MAX_3MF_COMPONENTS")
                     ref = c.get('objectid')
                     p_path = c.get(f'{{{NS_PROD}}}path') or c.get('path')
-                    if p_path:
-                        has_prod_path = True
                     M = _parse_transform(c.get('transform'), allow_alt_order=bool(p_path))
                     child_model = _norm_model_path(p_path) if p_path else _norm_model_path(model_path)
                     comp_list.append((child_model, ref, M))
             comps_map[oid] = comp_list
-    return meshes_mm, comps_map, base_vol_mm3, has_prod_path
+    return meshes_mm, comps_map, base_vol_mm3
 
 
 def _norm_model_path(path: str) -> str:
@@ -565,9 +561,7 @@ def _build_model_cache(zf: zipfile.ZipFile):
         _detect_and_set_namespace(root)
         unit_scale = _unit_to_mm(root.get('unit'))
         _last_status["unit_set"].add(root.get('unit') or 'millimeter')
-        meshes_mm, comps_map, base_vol_mm3, has_prod_path = _gather_model_mm(
-            root, unit_scale, mf, limits_state
-        )
+        meshes_mm, comps_map, base_vol_mm3 = _gather_model_mm(root, unit_scale, mf, limits_state)
         _last_status["component_count"] += sum(len(v) for v in comps_map.values())
         for lst in comps_map.values():
             for child_model, _, _ in lst:
@@ -582,7 +576,6 @@ def _build_model_cache(zf: zipfile.ZipFile):
             'comps': comps_map,
             'base_vol_mm3': base_vol_mm3,
             'root': root,
-            'has_prod_path': has_prod_path,
         }
     available_model_files = {_norm_model_path(key) for key in cache.keys()}
     missing = referenced_model_files - available_model_files
