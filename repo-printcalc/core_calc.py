@@ -332,7 +332,15 @@ def _unit_to_mm(unit_str: str) -> float:
     }.get(unit, 1.0)
 
 
-def _parse_transform(s: str | None) -> np.ndarray:
+def _det3(a00, a01, a02, a10, a11, a12, a20, a21, a22) -> float:
+    return (
+        a00 * (a11 * a22 - a12 * a21)
+        - a01 * (a10 * a22 - a12 * a20)
+        + a02 * (a10 * a21 - a11 * a20)
+    )
+
+
+def _parse_transform(s: str | None, *, allow_alt_order: bool = False) -> np.ndarray:
     """
     Контракт математики для 3MF-transform:
     - transform = 12 чисел: m00 m01 m02 m03 m10 m11 m12 m13 m20 m21 m22 m23 (3×4, перенос в 4-й колонке).
@@ -341,16 +349,40 @@ def _parse_transform(s: str | None) -> np.ndarray:
     """
     if not s:
         return np.eye(4, dtype=np.float64)
-    vals = [float(x) for x in s.replace(',', ' ').split()]
+    try:
+        vals = [float(x) for x in s.replace(",", " ").split()]
+    except Exception:
+        return np.eye(4, dtype=np.float64)
     if len(vals) != 12:
         return np.eye(4, dtype=np.float64)
-    m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23 = vals
-    return np.array([
-        [m00, m01, m02, m03],
-        [m10, m11, m12, m13],
-        [m20, m21, m22, m23],
-        [0.0, 0.0, 0.0, 1.0],
-    ], dtype=np.float64)
+    a00, a01, a02, a03, a10, a11, a12, a13, a20, a21, a22, a23 = vals
+    det_a = _det3(a00, a01, a02, a10, a11, a12, a20, a21, a22)
+    b00, b01, b02, b10, b11, b12, b20, b21, b22, b03, b13, b23 = vals
+    det_b = _det3(b00, b01, b02, b10, b11, b12, b20, b21, b22)
+    eps = 1e-12
+    use_b = (
+        allow_alt_order
+        and (abs(det_a) <= eps)
+        and (abs(det_b) > eps)
+        and (abs(det_b) > abs(det_a))
+    )
+    if use_b:
+        m00, m01, m02, m03 = b00, b01, b02, b03
+        m10, m11, m12, m13 = b10, b11, b12, b13
+        m20, m21, m22, m23 = b20, b21, b22, b23
+    else:
+        m00, m01, m02, m03 = a00, a01, a02, a03
+        m10, m11, m12, m13 = a10, a11, a12, a13
+        m20, m21, m22, m23 = a20, a21, a22, a23
+    return np.array(
+        [
+            [m00, m01, m02, m03],
+            [m10, m11, m12, m13],
+            [m20, m21, m22, m23],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
 
 
 def _apply_transform(V_mm: np.ndarray, M: np.ndarray) -> np.ndarray:
@@ -442,6 +474,7 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
     meshes_mm: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     comps_map: Dict[str, List[Tuple[str, str, np.ndarray]]] = {}
     base_vol_mm3: Dict[str, float] = {}
+    has_prod_path = False
 
     def _check_limit(kind: str, count: int, limit: int, label: str) -> None:
         if count > limit:
@@ -486,12 +519,14 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
                     limits_state["components"] += 1
                     _check_limit("components", limits_state["components"], MAX_3MF_COMPONENTS, "MAX_3MF_COMPONENTS")
                     ref = c.get('objectid')
-                    M = _parse_transform(c.get('transform'))
                     p_path = c.get(f'{{{NS_PROD}}}path') or c.get('path')
+                    if p_path:
+                        has_prod_path = True
+                    M = _parse_transform(c.get('transform'), allow_alt_order=bool(p_path))
                     child_model = _norm_model_path(p_path) if p_path else _norm_model_path(model_path)
                     comp_list.append((child_model, ref, M))
             comps_map[oid] = comp_list
-    return meshes_mm, comps_map, base_vol_mm3
+    return meshes_mm, comps_map, base_vol_mm3, has_prod_path
 
 
 def _norm_model_path(path: str) -> str:
@@ -530,7 +565,9 @@ def _build_model_cache(zf: zipfile.ZipFile):
         _detect_and_set_namespace(root)
         unit_scale = _unit_to_mm(root.get('unit'))
         _last_status["unit_set"].add(root.get('unit') or 'millimeter')
-        meshes_mm, comps_map, base_vol_mm3 = _gather_model_mm(root, unit_scale, mf, limits_state)
+        meshes_mm, comps_map, base_vol_mm3, has_prod_path = _gather_model_mm(
+            root, unit_scale, mf, limits_state
+        )
         _last_status["component_count"] += sum(len(v) for v in comps_map.values())
         for lst in comps_map.values():
             for child_model, _, _ in lst:
@@ -539,7 +576,14 @@ def _build_model_cache(zf: zipfile.ZipFile):
                     referenced_model_files.add(norm_child)
                 if norm_child != _norm_model_path(mf):
                     _last_status["external_p_path"] += 1
-        cache[mf] = {'unit_scale_mm': unit_scale,'meshes_mm': meshes_mm,'comps': comps_map,'base_vol_mm3': base_vol_mm3,'root': root}
+        cache[mf] = {
+            'unit_scale_mm': unit_scale,
+            'meshes_mm': meshes_mm,
+            'comps': comps_map,
+            'base_vol_mm3': base_vol_mm3,
+            'root': root,
+            'has_prod_path': has_prod_path,
+        }
     available_model_files = {_norm_model_path(key) for key in cache.keys()}
     missing = referenced_model_files - available_model_files
     if missing:
@@ -618,7 +662,10 @@ def parse_3mf(path: str):
 
             for idx, item in enumerate(items, 1):
                 oid = item.get('objectid')
-                Mitem = _parse_transform(item.get('transform'))
+                item_has_prod = any((NS_PROD in key) for key in item.attrib.keys())
+                Mitem = _parse_transform(
+                    item.get('transform'), allow_alt_order=item_has_prod
+                )
                 _last_status["det_values"].append(float(np.linalg.det(Mitem[:3, :3])))
                 V_mm, T, vol_mm3_fast = _flatten_object_cached(cache, mf, oid, Mitem)
                 if V_mm.size == 0 and vol_mm3_fast == 0.0:
