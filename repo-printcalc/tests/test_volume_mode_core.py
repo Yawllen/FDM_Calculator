@@ -1,6 +1,6 @@
 import numpy as np
 
-from core_calc import compute_volume_cm3
+from core_calc import compute_volume_cm3, is_stream_supported
 
 
 def test_compute_volume_cm3_fast_and_bbox():
@@ -76,3 +76,10 @@ def test_compute_volume_cm3_stream_prefers_precomputed(monkeypatch):
     )
 
     assert volume == 2.5
+
+
+def test_is_stream_supported_requires_stl():
+    assert is_stream_supported("model.stl") is True
+    assert is_stream_supported("MODEL.STL") is True
+    assert is_stream_supported("model.3mf") is False
+    assert is_stream_supported("model.obj") is False

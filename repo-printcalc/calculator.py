@@ -354,6 +354,13 @@ class CalculatorApp:
         mode_val = self.mode.get()
         fast_only = self.fast_volume_var.get() == 1
         stream_stl = self.stream_stl_var.get() == 1
+        if stream_stl and self.last_model_path and not core.is_stream_supported(self.last_model_path):
+            self.stream_stl_var.set(0)
+            messagebox.showerror(
+                'Ошибка',
+                'volume-mode=stream is supported only for STL files (binary STL will be validated from file)',
+            )
+            stream_stl = False
 
         diag_text = core.status_block_text() if (self.diag_var.get() == 1) else ""
 

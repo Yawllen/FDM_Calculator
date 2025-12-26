@@ -68,6 +68,10 @@ def deep_merge(dst: dict, src: dict) -> dict:
             dst[k] = v
     return dst
 
+
+def is_stream_supported(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() == ".stl"
+
 # ---------- Тираж (кол-во штук) ----------
 def coerce_qty(qty) -> int:
     """
