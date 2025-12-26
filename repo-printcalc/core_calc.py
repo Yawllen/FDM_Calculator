@@ -604,7 +604,10 @@ def _flatten_object_cached(cache: dict, model_file: str, oid: str, cum_M: np.nda
         if V_mm.size == 0 or T.size == 0:
             return np.zeros((0, 3), dtype=np.float64), np.zeros((0, 3), dtype=np.int32), 0.0
         Vt = _apply_transform(V_mm, cum_M)
-        det_full = abs(np.linalg.det(cum_M[:3, :3]))
+        r00, r01, r02 = cum_M[0, 0], cum_M[0, 1], cum_M[0, 2]
+        r10, r11, r12 = cum_M[1, 0], cum_M[1, 1], cum_M[1, 2]
+        r20, r21, r22 = cum_M[2, 0], cum_M[2, 1], cum_M[2, 2]
+        det_full = abs(_det3(r00, r01, r02, r10, r11, r12, r20, r21, r22))
         vol_mm3_fast = base_vol.get(oid, 0.0) * det_full
         return Vt, T.copy(), vol_mm3_fast
 
@@ -663,7 +666,10 @@ def parse_3mf(path: str):
                 Mitem = _parse_transform(
                     item.get('transform'), allow_alt_order=item_has_prod
                 )
-                _last_status["det_values"].append(float(np.linalg.det(Mitem[:3, :3])))
+                r00, r01, r02 = Mitem[0, 0], Mitem[0, 1], Mitem[0, 2]
+                r10, r11, r12 = Mitem[1, 0], Mitem[1, 1], Mitem[1, 2]
+                r20, r21, r22 = Mitem[2, 0], Mitem[2, 1], Mitem[2, 2]
+                _last_status["det_values"].append(float(_det3(r00, r01, r02, r10, r11, r12, r20, r21, r22)))
                 V_mm, T, vol_mm3_fast = _flatten_object_cached(cache, mf, oid, Mitem)
                 if V_mm.size == 0 and vol_mm3_fast == 0.0:
                     continue
