@@ -14,6 +14,7 @@ core_calc.py — чистое ядро 3D калькулятора печати 
 from __future__ import annotations
 
 import os
+import math
 import posixpath
 from collections import OrderedDict
 import struct
@@ -493,23 +494,54 @@ def _gather_model_mm(root: ET.Element, unit_scale_mm: float, model_path: str, li
             vs = mesh.find('ns:vertices', NAMESPACE)
             verts = []
             if vs is not None:
-                for v in vs.findall('ns:vertex', NAMESPACE):
+                for idx, v in enumerate(vs.findall('ns:vertex', NAMESPACE)):
                     limits_state["vertices"] += 1
                     _check_limit("vertices", limits_state["vertices"], MAX_3MF_VERTICES, "MAX_3MF_VERTICES")
-                    verts.append((float(v.get('x', '0')) * unit_scale_mm,
-                                  float(v.get('y', '0')) * unit_scale_mm,
-                                  float(v.get('z', '0')) * unit_scale_mm))
+                    try:
+                        x = float(v.get('x', '0')) * unit_scale_mm
+                        y = float(v.get('y', '0')) * unit_scale_mm
+                        z = float(v.get('z', '0')) * unit_scale_mm
+                    except Exception:
+                        raise ValueError(
+                            f"Malformed 3MF: invalid vertex floats in object {oid} at index {idx}"
+                        ) from None
+                    # Hot-path: avoid numpy ufunc overhead on scalars
+                    if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+                        raise ValueError(
+                            f"Malformed 3MF: non-finite vertex in object {oid} at index {idx}"
+                        )
+                    verts.append((x, y, z))
             V_mm = np.array(verts, dtype=np.float64) if verts else np.zeros((0, 3), dtype=np.float64)
 
             ts = mesh.find('ns:triangles', NAMESPACE)
             tris = []
             if ts is not None:
-                for t in ts.findall('ns:triangle', NAMESPACE):
+                vert_count = len(verts)
+                for idx, t in enumerate(ts.findall('ns:triangle', NAMESPACE)):
                     limits_state["triangles"] += 1
                     _check_limit("triangles", limits_state["triangles"], MAX_3MF_TRIANGLES, "MAX_3MF_TRIANGLES")
-                    tris.append((int(t.get('v1', '0')),
-                                 int(t.get('v2', '0')),
-                                 int(t.get('v3', '0'))))
+                    v1_raw = t.get('v1', '0')
+                    v2_raw = t.get('v2', '0')
+                    v3_raw = t.get('v3', '0')
+                    try:
+                        v1 = int(v1_raw)
+                        v2 = int(v2_raw)
+                        v3 = int(v3_raw)
+                    except (TypeError, ValueError):
+                        raise ValueError(
+                            f"Invalid triangle in object {oid} at index {idx}: "
+                            f"v1={v1_raw} v2={v2_raw} v3={v3_raw}"
+                        ) from None
+                    if not (
+                        0 <= v1 < vert_count
+                        and 0 <= v2 < vert_count
+                        and 0 <= v3 < vert_count
+                    ):
+                        raise ValueError(
+                            f"Invalid triangle in object {oid} at index {idx}: "
+                            f"v1={v1} v2={v2} v3={v3}"
+                        )
+                    tris.append((v1, v2, v3))
             T = np.array(tris, dtype=np.int32) if tris else np.zeros((0, 3), dtype=np.int32)
             meshes_mm[oid] = (V_mm, T)
             base_vol_mm3[oid] = volume_tetra_units(V_mm / max(unit_scale_mm, 1e-12), T) * (unit_scale_mm ** 3)
