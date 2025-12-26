@@ -309,6 +309,9 @@ def compute_volume_cm3(V_mm: np.ndarray, T: np.ndarray, *, mode: str, meta: dict
         return volume_bbox(V_mm)
     if mode_norm == "stream":
         meta = meta or {}
+        precomputed_stream = meta.get("precomputed_stream_volume_cm3")
+        if precomputed_stream is not None and precomputed_stream > 0:
+            return float(precomputed_stream)
         precomputed = meta.get("precomputed_volume_cm3")
         if precomputed is not None and precomputed > 0:
             return float(precomputed)
@@ -683,9 +686,9 @@ def parse_3mf(path: str):
         selected = item_models if item_models else model_files
         for mf in selected:
             items = items_per_model.get(mf, [])
+            model_ids = set(cache[mf]['meshes_mm'].keys()) | set(cache[mf]['comps'].keys())
             if not items:
-                all_ids = set(cache[mf]['meshes_mm'].keys()) | set(cache[mf]['comps'].keys())
-                for oid in all_ids:
+                for oid in model_ids:
                     V_mm, T, vol_mm3_fast = _flatten_object_cached(cache, mf, oid, np.eye(4))
                     if V_mm.size == 0 and vol_mm3_fast == 0.0:
                         continue
@@ -695,6 +698,14 @@ def parse_3mf(path: str):
 
             for idx, item in enumerate(items, 1):
                 oid = item.get('objectid')
+                if oid is None or oid == "":
+                    raise ValueError("Malformed 3MF: build item missing required objectid")
+                if oid not in model_ids:
+                    model_name = os.path.basename(mf) or mf
+                    raise ValueError(
+                        f"Malformed 3MF: build item references missing object id {oid} "
+                        f"in model {model_name}"
+                    )
                 item_has_prod = any((NS_PROD in key) for key in item.attrib.keys())
                 Mitem = _parse_transform(
                     item.get('transform'), allow_alt_order=item_has_prod
@@ -797,26 +808,51 @@ def stl_stream_volume_cm3(path: str) -> float:
 def parse_stl(path: str):
     count = _read_and_validate_binary_stl(path)
     verts, tris, idx_map = [], [], {}
+    total6 = 0.0
+    def _vertex_index(xyz, tri_idx: int, vi: int) -> int:
+        if not (math.isfinite(xyz[0]) and math.isfinite(xyz[1]) and math.isfinite(xyz[2])):
+            raise ValueError(
+                f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx} vertex {vi}"
+            )
+        idx = idx_map.get(xyz)
+        if idx is None:
+            idx = len(verts)
+            idx_map[xyz] = idx
+            verts.append(xyz)
+        return idx
     try:
         with open(path, 'rb') as f:
             f.seek(84)
             for tri_idx in range(count):
-                f.read(12); face = []
-                for vi in range(3):
-                    xyz = struct.unpack('<fff', f.read(12))
-                    if not (math.isfinite(xyz[0]) and math.isfinite(xyz[1]) and math.isfinite(xyz[2])):
-                        raise ValueError(
-                            f"Malformed binary STL: non-finite vertex coordinate at triangle {tri_idx} vertex {vi}"
-                        )
-                    if xyz not in idx_map:
-                        idx_map[xyz] = len(verts); verts.append(xyz)
-                    face.append(idx_map[xyz])
-                tris.append(tuple(face)); f.read(2)
+                f.read(12)
+                v0 = struct.unpack('<fff', f.read(12))
+                v1 = struct.unpack('<fff', f.read(12))
+                v2 = struct.unpack('<fff', f.read(12))
+                face = (
+                    _vertex_index(v0, tri_idx, 0),
+                    _vertex_index(v1, tri_idx, 1),
+                    _vertex_index(v2, tri_idx, 2),
+                )
+                tris.append(face)
+                cx = (v1[1]*v2[2] - v1[2]*v2[1])
+                cy = (v1[2]*v2[0] - v1[0]*v2[2])
+                cz = (v1[0]*v2[1] - v1[1]*v2[0])
+                total6 += v0[0]*cx + v0[1]*cy + v0[2]*cz
+                f.read(2)
     except struct.error as e:
         raise ValueError(f"Malformed binary STL: failed to read triangle data ({e})") from None
     V = np.array(verts, dtype=np.float64); T = np.array(tris, dtype=np.int32)
     vol_fast_cm3 = volume_tetra(V, T)
-    return [("STL model", V, T, vol_fast_cm3, {'type': 'stl', 'path': path})]
+    vol_stream_cm3 = abs(total6) / 6.0 / 1000.0
+    return [
+        (
+            "STL model",
+            V,
+            T,
+            vol_fast_cm3,
+            {'type': 'stl', 'path': path, 'precomputed_stream_volume_cm3': vol_stream_cm3},
+        )
+    ]
 
 
 def parse_geometry(path: str):
