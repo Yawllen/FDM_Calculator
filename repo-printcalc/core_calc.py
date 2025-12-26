@@ -327,6 +327,7 @@ MAX_3MF_OBJECTS = 20000
 MAX_3MF_COMPONENTS = 200000
 MAX_3MF_VERTICES = 20_000_000
 MAX_3MF_TRIANGLES = 40_000_000
+MAX_STL_TRIANGLES = 2_000_000
 MAX_CACHE_ENTRIES = 64
 
 
@@ -741,6 +742,13 @@ def _read_and_validate_binary_stl(path: str) -> int:
         count = struct.unpack("<I", count_bytes)[0]
     except struct.error as e:
         raise ValueError(f"Malformed binary STL: cannot read triangle count ({e})") from None
+
+    if count > MAX_STL_TRIANGLES:
+        if ascii_like:
+            raise ValueError(_ASCII_STL_MESSAGE)
+        raise ValueError(
+            f"STL limit exceeded: triangles={count} > {MAX_STL_TRIANGLES}"
+        )
 
     max_count = max(0, (file_size - 84) // 50)
     if count > max_count:
