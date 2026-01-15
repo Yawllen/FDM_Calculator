@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 CLI-версия 3D калькулятора печати (FDM)
-— быстрая серверная утилита без UI, 3MF/STL, точность = GUI-версии (всегда метод tetra)
+— быстрая серверная утилита без UI, 3MF/STL; результаты эквивалентны GUI при одинаковых настройках (volume-mode: tetra/bbox).
 
 Примеры:
   python cli_calculator.py model.3mf --material "Enduse PETG" --infill 20 --json
@@ -267,7 +267,7 @@ def _compute_one_file(
 
     for _, V, T, vol_fast_cm3, srcinfo in objs:
         # 1) Объём модели (см³)
-        # Для 3MF в fast-режиме используем предрасчитанный объём с учётом transforms.
+        # Для 3MF в tetra-режиме используем предрасчитанный объём с учётом transforms.
         meta_for_volume = dict(srcinfo or {})
         if (
             volume_mode == "tetra"
