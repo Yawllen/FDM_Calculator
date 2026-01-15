@@ -935,8 +935,24 @@ def calc_breakdown(pricing: dict, total_mat_cost: float, total_V_total_cm3: floa
 
     non_material = energy_cost + depreciation_cost + labor_cost + consumables + fixed_overhead
 
-    risk_cfg = p.get("risk", {})
-    reserve = (non_material * (nz(risk_cfg.get("pct"), 0.0) / 100.0)) if (risk_cfg.get("apply_to", "non_material") == "non_material") else 0.0
+    risk_cfg = p.get("risk", {}) or {}
+    risk_pct = nz(risk_cfg.get("pct"), 0.0) / 100.0
+    apply_to = str(risk_cfg.get("apply_to", "non_material")).strip().lower()
+
+    if risk_pct <= 0.0:
+        reserve = 0.0
+    elif apply_to == "material":
+        # Резерв считается от стоимости материала
+        reserve = total_mat_cost * risk_pct
+    elif apply_to == "non_material":
+        # Старое поведение (по умолчанию): резерв от "не-материальных" затрат
+        reserve = non_material * risk_pct
+    elif apply_to in ("subtotal", "total", "all"):
+        # Опционально: резерв от суммы (материал + не-материал)
+        reserve = (total_mat_cost + non_material) * risk_pct
+    else:
+        # Безопасный fallback: не ломаем расчёт при неизвестном значении
+        reserve = non_material * risk_pct
 
     subtotal = total_mat_cost + non_material + reserve
 
@@ -947,37 +963,17 @@ def calc_breakdown(pricing: dict, total_mat_cost: float, total_V_total_cm3: floa
     fee_pct    = nz(p.get("service_fee_pct"), 0.0) / 100.0
     vat_pct    = nz(p.get("vat_pct"), 0.0) / 100.0
 
-    if min_policy == "subtotal":
-        base_for_margin = max(min_order, subtotal)
-        min_applied = (min_order > subtotal)
-        markup = base_for_margin * markup_pct
-        after_markup = base_for_margin + markup
-        service_fee = after_markup * fee_pct
-        after_service = after_markup + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        total_raw = chain_total
+    # Считаем цепочку всегда от фактического subtotal
+    markup = subtotal * markup_pct
+    after_markup = subtotal + markup
+    service_fee = after_markup * fee_pct
+    after_service = after_markup + service_fee
+    vat = after_service * vat_pct
+    chain_total = after_service + vat
 
-    elif min_policy == "after_markup":
-        markup = subtotal * markup_pct
-        after_markup = subtotal + markup
-        base2 = max(min_order, after_markup)
-        min_applied = (min_order > after_markup)
-        service_fee = base2 * fee_pct
-        after_service = base2 + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        total_raw = chain_total
-
-    else:  # "final"
-        markup = subtotal * markup_pct
-        after_markup = subtotal + markup
-        service_fee = after_markup * fee_pct
-        after_service = after_markup + service_fee
-        vat = after_service * vat_pct
-        chain_total = after_service + vat
-        min_applied = (min_order > chain_total)
-        total_raw = max(min_order, chain_total)
+    # Минимальный чек трактуем как "минимум к оплате" (после всех процентов)
+    min_applied = (min_order > chain_total)
+    total_raw = max(min_order, chain_total)
 
     total = round_to_step(total_raw, p.get("rounding_to_rub", 1))
     return {
