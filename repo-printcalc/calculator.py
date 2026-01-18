@@ -72,8 +72,6 @@ class CalculatorApp:
 
         # UI-переменные
         self.mode = tk.StringVar(value='tetra')
-        self.fast_volume_var = tk.IntVar(value=0)
-        self.stream_stl_var = tk.IntVar(value=0)
         self.selected_material = tk.StringVar(value=next(iter(self.materials_density.keys())))
         # Количество одинаковых экземпляров (тираж). Цена считается за заказ.
         self.qty_var = tk.IntVar(value=1)
@@ -182,12 +180,6 @@ class CalculatorApp:
         tk.Radiobutton(frame, text='Тетраэдры',
                        variable=self.mode, value='tetra', font=('Arial', 12),
                        bg='#f9f9f9', fg='#7A6EB0', command=self.recalc).pack(anchor='w')
-
-        fast_frame = tk.Frame(frame, bg='#f9f9f9'); fast_frame.pack(pady=(6, 6), fill='x')
-        tk.Checkbutton(fast_frame, text='Быстрый объём (без стенок/крышек)',
-                       variable=self.fast_volume_var, bg='#f9f9f9', command=self.recalc).pack(anchor='w')
-        tk.Checkbutton(fast_frame, text='Потоковый STL (объём напрямую из файла)',
-                       variable=self.stream_stl_var, bg='#f9f9f9', command=self.recalc).pack(anchor='w')
 
         material_frame = tk.Frame(frame, bg='#f9f9f9'); material_frame.pack(pady=(5, 5), fill='x')
         tk.Label(material_frame, text='Материал:', font=('Arial', 12), bg='#f9f9f9').pack(side='left')
@@ -351,12 +343,8 @@ class CalculatorApp:
         density = core.nz(self.materials_density.get(material), 1.2)
         price_g = core.nz(self.price_per_gram.get(material), 0.0)
 
-        mode_val = self.mode.get()
-        fast_only = self.fast_volume_var.get() == 1
-        stream_stl = self.stream_stl_var.get() == 1
-
+        mode_val = self.mode.get()  # "tetra" | "bbox"
         diag_text = core.status_block_text() if (self.diag_var.get() == 1) else ""
-
 
         wall_count = 2; wall_width = 0.4; layer_height_geo = 0.2; top_bottom_layers = 4
         vol_factor = core.nz(self.pricing.get("geometry", {}).get("volume_factor"), 1.0)
@@ -368,27 +356,21 @@ class CalculatorApp:
 
         for _, V, T, vol_fast_cm3, src in self.loaded:
             if src.get('type') == '3mf' and vol_fast_cm3 > 0:
-                V_model = vol_fast_cm3
+                V_model = float(vol_fast_cm3)
             else:
-                if fast_only and src.get('type') == 'stl' and stream_stl and src.get('path'):
-                    try:
-                        V_model = core.stl_stream_volume_cm3(src['path'])
-                    except Exception:
-                        V_model = core.volume_bbox(V) if mode_val == 'bbox' else core.volume_tetra(V, T)
-                else:
-                    V_model = core.volume_bbox(V) if mode_val == 'bbox' else core.volume_tetra(V, T)
+                V_model = core.volume_bbox(V) if mode_val == 'bbox' else core.volume_tetra(V, T)
 
             V_total = core.compute_print_volume_cm3(
                 V_model_cm3=V_model,
                 V_mm=V,
                 T=T,
                 infill_pct=infill,
-                fast_only=bool(fast_only),
                 wall_count=wall_count,
                 wall_width=wall_width,
                 layer_height_geo=layer_height_geo,
                 top_bottom_layers=top_bottom_layers,
             )
+
             V_total *= vol_factor  # калибровка
 
             weight_g = V_total * density
@@ -410,7 +392,7 @@ class CalculatorApp:
         bd = core.calc_breakdown(self.pricing, total_material_cost, total_V_total_cm3, setup_min, post_min)
 
         if len(self.loaded) == 1:
-            obj_name = os.path.basename(self.loaded[0][0])
+            obj_name = str(self.loaded[0][0])
         else:
             obj_name = f"Сборка ({len(self.loaded)} объектов)"
 
